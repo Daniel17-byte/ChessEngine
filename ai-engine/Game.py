@@ -7,46 +7,52 @@ class Game:
         self.ai_black = ai_black
         self.turn = chess.WHITE
 
+    def _auto_promote_if_needed(self, move_uci):
+        if len(move_uci) == 4:
+            from_sq = chess.parse_square(move_uci[:2])
+            to_sq = chess.parse_square(move_uci[2:4])
+            piece = self.board.piece_at(from_sq)
+            if piece and piece.piece_type == chess.PAWN:
+                if (piece.color == chess.WHITE and to_sq // 8 == 0) or \
+                   (piece.color == chess.BLACK and to_sq // 8 == 7):
+                    return move_uci + 'q'
+        return move_uci
+
+    def _calculate_reward(self, move, captured_piece):
+        piece_values = {'p': 1, 'n': 3, 'b': 3, 'r': 5, 'q': 9, 'k': 0}
+        reward = -0.01
+        if captured_piece:
+            num_pieces = len(self.board.piece_map())
+            scaling = 1.0 if num_pieces > 20 else 1.5
+            reward += piece_values.get(captured_piece.symbol().lower(), 0) * scaling
+
+        self.board.push(move)
+
+        for square in self.board.piece_map():
+            piece = self.board.piece_at(square)
+            if piece and piece.color == self.board.turn:
+                if self.board.is_attacked_by(not self.board.turn, square):
+                    reward -= piece_values.get(piece.symbol().lower(), 0) * 0.5
+
+        for sq in [chess.E4, chess.D4, chess.E5, chess.D5]:
+            piece = self.board.piece_at(sq)
+            if piece and piece.color != self.board.turn:
+                reward += 0.05
+
+        return reward
+
     def make_move(self, move_uci=None):
         if self.board.is_game_over():
             return False, "Game is already over"
 
-        # Detectăm promovarea implicită la regină doar dacă e pion
-        if len(move_uci) == 4:
-            from_square = chess.parse_square(move_uci[:2])
-            to_square = chess.parse_square(move_uci[2:4])
-            piece = self.board.piece_at(from_square)
-            if piece and piece.piece_type == chess.PAWN:
-                # Verificăm dacă pionul ajunge la ultima linie pentru promovare
-                if (piece.color == chess.WHITE and to_square // 8 == 0) or \
-                   (piece.color == chess.BLACK and to_square // 8 == 7):
-                    move_uci += 'q'  # promovare implicită la regină
-
+        move_uci = self._auto_promote_if_needed(move_uci)
         move = chess.Move.from_uci(move_uci)
-        if move in self.board.legal_moves:
-            captured_piece = self.board.piece_at(move.to_square)
-            piece_values = {'p': 1, 'n': 3, 'b': 3, 'r': 5, 'q': 9, 'k': 0}
-            reward = -0.01  # penalizare implicită pentru mutare pasivă
-            # reward = 0
-            if captured_piece:
-                num_pieces = len(self.board.piece_map())
-                scaling = 1.0 if num_pieces > 20 else 1.5
-                reward += piece_values.get(captured_piece.symbol().lower(), 0) * scaling
-            self.board.push(move)
-            # Penalizare dacă o piesă rămâne sub atac după mutare
-            for square in self.board.piece_map():
-                piece = self.board.piece_at(square)
-                if piece and piece.color == self.board.turn:  # piesele celui care a mutat
-                    if self.board.is_attacked_by(not self.board.turn, square):
-                        reward -= piece_values.get(piece.symbol().lower(), 0) * 0.5
-            # Bonus pentru controlul centrului
-            central_squares = [chess.E4, chess.D4, chess.E5, chess.D5]
-            for sq in central_squares:
-                piece = self.board.piece_at(sq)
-                if piece and piece.color != self.board.turn:
-                    reward += 0.05
-        else:
+
+        if move not in self.board.legal_moves:
             return False, "Mutare ilegală"
+
+        captured_piece = self.board.piece_at(move.to_square)
+        reward = self._calculate_reward(move, captured_piece)
 
         return True, {
             "fen": self.board.fen(),

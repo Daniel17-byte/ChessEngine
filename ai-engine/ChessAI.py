@@ -18,7 +18,7 @@ class ChessAI:
         self.is_white = is_white
         self.board = chess.Board()
         self.model = ChessNet(len(move_list))
-        model_path = "trained_model_white.pth" if self.is_white else "trained_model_black.pth"
+        model_path = "trained_model_white.pth" if self.is_white else "chessnet.pth"
         if os.path.exists(model_path):
             try:
 
@@ -39,7 +39,7 @@ class ChessAI:
         self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
 
         self.model.eval()
-        self.epsilon = 0.2
+        self.epsilon = 0.1
         self.default_strategy = default_strategy
 
     def move_to_index(self, move_uci: str) -> int:
@@ -55,7 +55,7 @@ class ChessAI:
         if strategy is None:
             strategy = random.choices(
                 ['epsilon', 'model', 'minimax'],
-                weights=[30.0, 40.0, 30.0],
+                weights=[10.0, 80.0, 10.0],
                 k=1
             )[0]
 

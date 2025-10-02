@@ -1,19 +1,35 @@
 import chess
 import json
 
-def generate_all_possible_uci_moves():
-    all_moves = set()
-    for from_square in chess.SQUARES:
-        for to_square in chess.SQUARES:
-            move = chess.Move(from_square, to_square)
-            all_moves.add(move.uci())
-            for promo in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]:
-                move = chess.Move(from_square, to_square, promotion=promo)
-                all_moves.add(move.uci())
-    return sorted(all_moves)
+def generate_legal_moves_from_fens(
+        game_fens_path="generated_games.json",
+        endgame_fens_path="generated_endgames.json",
+        output_path="move_mapping.json"
+):
+    all_legal_moves = set()
+
+    # Încarcă FEN-uri din jocuri complete
+    with open(game_fens_path, "r") as f:
+        game_fens = json.load(f)
+    for fen in game_fens:
+        board = chess.Board(fen)
+        for move in board.legal_moves:
+            all_legal_moves.add(move.uci())
+
+    # Încarcă FEN-uri din endgames
+    with open(endgame_fens_path, "r") as f:
+        endgame_fens = json.load(f)
+    for fen in endgame_fens:
+        board = chess.Board(fen)
+        for move in board.legal_moves:
+            all_legal_moves.add(move.uci())
+
+    # Salvăm mutările legale unice
+    idx_to_move = sorted(list(all_legal_moves))
+    with open(output_path, "w") as f:
+        json.dump(idx_to_move, f, indent=2)
+
+    print(f"✅ Salvat {len(idx_to_move)} mutări legale în '{output_path}'")
 
 if __name__ == "__main__":
-    moves = generate_all_possible_uci_moves()
-    with open("move_mapping.json", "w") as f:
-        json.dump(moves, f)
-    print(f"✅ Salvat {len(moves)} mutări în move_mapping.json")
+    generate_legal_moves_from_fens()

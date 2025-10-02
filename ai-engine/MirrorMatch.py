@@ -24,8 +24,8 @@ move_to_idx = {m: i for i, m in enumerate(move_list)}
 #             fens = json.load(file)
 #     return fens
 
-ai_white = ChessAI(is_white=True)
-ai_black = ChessAI(is_white=False)
+ai_white = ChessAI(is_white=True, default_strategy='epsilon')
+ai_black = ChessAI(is_white=False, default_strategy='epsilon')
 game = Game(ai_white, ai_black)
 stats = Counter()
 
@@ -33,8 +33,8 @@ optimizer_white = torch.optim.Adam(ai_white.model.parameters(), lr=0.001)
 optimizer_black = torch.optim.Adam(ai_black.model.parameters(), lr=0.001)
 loss_fn = torch.nn.CrossEntropyLoss()
 
-num_epochs = 1000
-max_moves_per_game = 40
+num_epochs = 500
+max_moves_per_game = 30
 
 def compute_base(move_count_):
     base_ = 5.0
@@ -44,12 +44,6 @@ def compute_base(move_count_):
     return base_ * decay
 
 # fen_positions = load_fens_from_files()
-
-def get_weight_sum(model_):
-    return sum(p.sum().item() for p in model_.parameters())
-
-prev_white = get_weight_sum(ai_white.model)
-prev_black = get_weight_sum(ai_black.model)
 
 for epoch in range(num_epochs):
     # if fen_positions:
@@ -141,19 +135,14 @@ for epoch in range(num_epochs):
         total_loss += scaled_loss.item()
         total_scaled_reward += total_reward
 
-    avg_raw_loss = total_raw_loss / len(history) if history else 0.0
     avg_loss = total_loss / len(history) if history else 0.0
-    avg_reward = total_scaled_reward / len(history) if history else 0.0
     stats[result] += 1
-    print(f"🏋️ Epoch {epoch+1} | Raw loss: {avg_raw_loss:.4f} | Scaled loss: {avg_loss:.4f} | Reward mediu: {avg_reward:.4f} | 🎯 Rezultat: {result} | Mutări: {move_count} | 🏆 Reward final: Alb = {reward[True]:.2f}, Negru = {reward[False]:.2f}")
+    print(f"🏋️ Epoch {epoch+1}/{num_epochs}  | Avg loss: {avg_loss:.4f} | 🏆 Reward final: Alb = {reward[True]:.2f}, Negru = {reward[False]:.2f}")
 
-    if (epoch + 1) % 10 == 0:
-        print(f"🏁 WHITE {stats['1-0']} | BLACK {stats['0-1']} | DRAW {stats['1/2-1/2']} | Total: {stats['*']} ")
+    if (epoch + 1) % 50 == 0:
         torch.save(ai_white.model.state_dict(), "trained_model_white.pth")
         torch.save(ai_black.model.state_dict(), "trained_model_black.pth")
 
-curr_white = get_weight_sum(ai_white.model)
-curr_black = get_weight_sum(ai_black.model)
 torch.save(ai_white.model.state_dict(), "trained_model_white.pth")
 torch.save(ai_black.model.state_dict(), "trained_model_black.pth")
 print("💾 Modele salvate în 'trained_model_white.pth' și 'trained_model_black.pth'")
