@@ -17,15 +17,16 @@ with open('move_mapping.json', 'r', encoding='utf-8') as f:
     move_list = json.load(f)
 move_to_idx = {m: i for i, m in enumerate(move_list)}
 
-# def load_fens_from_files(filepath="generated_games.json"):
-#     fens = []
-#     if os.path.exists(filepath):
-#         with open(filepath, "r") as file:
-#             fens = json.load(file)
-#     return fens
+def load_fens_from_files(filepath="generated_games.json"):
+    fens = []
+    if os.path.exists(filepath):
+        with open(filepath, "r") as file:
+            fens = json.load(file)
+    random.shuffle(fens)
+    return fens
 
-ai_white = ChessAI(is_white=True, default_strategy='epsilon')
-ai_black = ChessAI(is_white=False, default_strategy='epsilon')
+ai_white = ChessAI(is_white=True)
+ai_black = ChessAI(is_white=False)
 game = Game(ai_white, ai_black)
 stats = Counter()
 
@@ -33,8 +34,8 @@ optimizer_white = torch.optim.Adam(ai_white.model.parameters(), lr=0.001)
 optimizer_black = torch.optim.Adam(ai_black.model.parameters(), lr=0.001)
 loss_fn = torch.nn.CrossEntropyLoss()
 
-num_epochs = 500
-max_moves_per_game = 30
+num_epochs = 1000
+max_moves_per_game = 40
 
 def compute_base(move_count_):
     base_ = 5.0
@@ -43,15 +44,15 @@ def compute_base(move_count_):
     decay = math.exp(-k * move_count_ / max_moves_per_game)
     return base_ * decay
 
-# fen_positions = load_fens_from_files()
+fen_positions = load_fens_from_files()
 
 for epoch in range(num_epochs):
-    # if fen_positions:
-    #     fen = random.choice(fen_positions)
-    #     game.reset_from_fen(fen)
-    # else:
-    #     game.reset()
-    game.reset()
+    if fen_positions:
+        fen = random.choice(fen_positions)
+        game.reset_from_fen(fen)
+    else:
+        game.reset()
+    # game.reset()
     history = []
     move_count = 0
 
@@ -137,12 +138,16 @@ for epoch in range(num_epochs):
 
     avg_loss = total_loss / len(history) if history else 0.0
     stats[result] += 1
-    print(f"🏋️ Epoch {epoch+1}/{num_epochs}  | Avg loss: {avg_loss:.4f} | 🏆 Reward final: Alb = {reward[True]:.2f}, Negru = {reward[False]:.2f}")
+    winner = "Alb" if result == "1-0" else "Negru" if result == "0-1" else "Remiză"
+    print(
+        f"🏋️ Epoch {epoch+1}/{num_epochs} | Avg loss: {avg_loss:.4f} | "
+        f"🏆 Reward final: Alb = {reward[True]:.2f}, Negru = {reward[False]:.2f} | "
+        f"🎯 Câștigător: {winner}"
+    )
 
     if (epoch + 1) % 50 == 0:
-        torch.save(ai_white.model.state_dict(), "trained_model_white.pth")
-        torch.save(ai_black.model.state_dict(), "trained_model_black.pth")
+        torch.save(ai_white.model.state_dict(), "chessnet.pth")
+        print(f"Model salvat la epoch {epoch+1}")
 
-torch.save(ai_white.model.state_dict(), "trained_model_white.pth")
-torch.save(ai_black.model.state_dict(), "trained_model_black.pth")
-print("💾 Modele salvate în 'trained_model_white.pth' și 'trained_model_black.pth'")
+torch.save(ai_white.model.state_dict(), "chessnet.pth")
+print("💾 Model final salvat în 'chessnet.pth'")

@@ -13,12 +13,14 @@ with open('move_mapping.json', 'r', encoding='utf-8') as fmap:
 w2i = {m: i for i, m in enumerate(move_list)}
 b2i = w2i
 
+engine_path = "/opt/homebrew/bin/stockfish"
+
 class ChessAI:
     def __init__(self, is_white=True, default_strategy: Optional[str] = None):
         self.is_white = is_white
         self.board = chess.Board()
         self.model = ChessNet(len(move_list))
-        model_path = "trained_model_white.pth" if self.is_white else "chessnet.pth"
+        model_path = "chessnet.pth"
         if os.path.exists(model_path):
             try:
 
@@ -32,6 +34,12 @@ class ChessAI:
                 print("⚠️ Se va antrena de la zero.")
         else:
             print(f"⚠️ Modelul nu a fost găsit ({model_path}) — se va antrena de la zero.")
+
+        if os.path.exists(engine_path):
+            self.engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+        else:
+            self.engine = None
+            print(f"⚠️ Stockfish nu a fost găsit la {engine_path}. Strategy 'stockfish' nu va fi disponibil.")
 
         import json
         with open("move_mapping.json") as f:
@@ -54,8 +62,8 @@ class ChessAI:
             strategy = self.default_strategy
         if strategy is None:
             strategy = random.choices(
-                ['epsilon', 'model', 'minimax'],
-                weights=[10.0, 80.0, 10.0],
+                ['epsilon', 'model', 'minimax', 'stockfish'],
+                weights=[10.0, 60.0, 0.0, 30.0],
                 k=1
             )[0]
 
@@ -65,7 +73,17 @@ class ChessAI:
             return self.get_best_move_from_model(board)
         elif strategy == 'minimax':
             return self.select_move_minimax(board)
+        elif strategy == 'stockfish':
+            return self.get_best_move_from_stockfish(board)
         return None
+
+    def get_best_move_from_stockfish(self, board: chess.Board, time_limit: float = 0.1) -> Optional[chess.Move]:
+        if self.engine is None:
+            return random.choice(list(board.legal_moves))
+        if board.is_game_over():
+            return None
+        result = self.engine.play(board, chess.engine.Limit(time=time_limit))
+        return result.move
 
     def get_best_move_from_model(self, board: chess.Board) -> Optional[chess.Move]:
         self.board = board
