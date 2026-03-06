@@ -13,8 +13,9 @@ class Game:
             to_sq = chess.parse_square(move_uci[2:4])
             piece = self.board.piece_at(from_sq)
             if piece and piece.piece_type == chess.PAWN:
-                if (piece.color == chess.WHITE and to_sq // 8 == 0) or \
-                   (piece.color == chess.BLACK and to_sq // 8 == 7):
+                # White promotes when reaching rank 7 (8th row), Black promotes when reaching rank 0 (1st row)
+                if (piece.color == chess.WHITE and chess.square_rank(to_sq) == 7) or \
+                        (piece.color == chess.BLACK and chess.square_rank(to_sq) == 0):
                     return move_uci + 'q'
         return move_uci
 
@@ -26,6 +27,7 @@ class Game:
             scaling = 1.0 if num_pieces > 20 else 1.5
             reward += piece_values.get(captured_piece.symbol().lower(), 0) * scaling
 
+        # Temporarily push move to evaluate positional factors
         self.board.push(move)
 
         for square in self.board.piece_map():
@@ -38,6 +40,9 @@ class Game:
             piece = self.board.piece_at(sq)
             if piece and piece.color != self.board.turn:
                 reward += 0.05
+
+        # Pop the move so make_move can push it properly
+        self.board.pop()
 
         return reward
 
@@ -54,18 +59,30 @@ class Game:
         captured_piece = self.board.piece_at(move.to_square)
         reward = self._calculate_reward(move, captured_piece)
 
+        # Actually apply the move to the board
+        self.board.push(move)
+
+        # verificăm starea jocului după mutare
         return True, {
             "fen": self.board.fen(),
             "turn": "white" if self.board.turn == chess.WHITE else "black",
             "is_check": self.board.is_check(),
             "is_checkmate": self.board.is_checkmate(),
             "is_stalemate": self.board.is_stalemate(),
+            "is_insufficient_material": self.board.is_insufficient_material(),
+            "is_fifty_moves": self.board.is_fifty_moves(),
+            "can_claim_fifty_moves": self.board.can_claim_fifty_moves(),
+            "is_repetition": self.board.is_repetition(),
+            "can_claim_threefold_repetition": self.board.can_claim_threefold_repetition(),
             "is_game_over": self.board.is_game_over(),
             "reward": reward
         }
 
     def reset(self):
         self.board.reset()
+        self.turn = chess.WHITE  # Reset turn to white
+        print("🔄 Board has been reset to initial state.")  # Debugging log
+        print(f"Current FEN: {self.board.fen()}")  # Log the FEN for debugging
         return {
             "message": "Board reset",
             "fen": self.board.fen(),
@@ -85,7 +102,12 @@ class Game:
             "is_check": self.board.is_check(),
             "is_checkmate": self.board.is_checkmate(),
             "is_stalemate": self.board.is_stalemate(),
-            "is_insufficient_material": self.board.is_insufficient_material()
+            "is_insufficient_material": self.board.is_insufficient_material(),
+            "is_fifty_moves": self.board.is_fifty_moves(),
+            "can_claim_fifty_moves": self.board.can_claim_fifty_moves(),
+            "is_repetition": self.board.is_repetition(),
+            "can_claim_threefold_repetition": self.board.can_claim_threefold_repetition(),
+            "is_game_over": self.board.is_game_over()
         }
 
     def get_board_fen(self):

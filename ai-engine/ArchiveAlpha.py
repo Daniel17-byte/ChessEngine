@@ -51,12 +51,16 @@ class ChessDataset(Dataset):
 
 def encode_board(board):
     """
-    12‐plane binary feature:
-      planes 0–5  = white pawn, knight, bishop, rook, queen, king
-      planes 6–11 = black pawn, knight, bishop, rook, queen, king
-    Returns a torch.FloatTensor of shape [12,8,8].
+    18‐plane feature encoding:
+      planes 0–5   = white pawn, knight, bishop, rook, queen, king
+      planes 6–11  = black pawn, knight, bishop, rook, queen, king
+      plane 12     = turn indicator (all 1s if white to move, 0s if black)
+      planes 13–16 = castling rights (white K, white Q, black k, black q)
+      plane 17     = en passant square (1 at the target square, 0 elsewhere)
+    Returns a torch.FloatTensor of shape [18,8,8].
     """
-    arr = np.zeros((12, 8, 8), dtype=np.float32)
+    arr = np.zeros((18, 8, 8), dtype=np.float32)
+    # Piece planes
     for square, piece in board.piece_map().items():
         pt = piece.piece_type  # 1..6
         color = piece.color    # True=white, False=black
@@ -64,6 +68,23 @@ def encode_board(board):
         rank = chess.square_rank(square)
         file = chess.square_file(square)
         arr[plane, rank, file] = 1.0
+    # Turn indicator
+    if board.turn == chess.WHITE:
+        arr[12, :, :] = 1.0
+    # Castling rights
+    if board.has_kingside_castling_rights(chess.WHITE):
+        arr[13, :, :] = 1.0
+    if board.has_queenside_castling_rights(chess.WHITE):
+        arr[14, :, :] = 1.0
+    if board.has_kingside_castling_rights(chess.BLACK):
+        arr[15, :, :] = 1.0
+    if board.has_queenside_castling_rights(chess.BLACK):
+        arr[16, :, :] = 1.0
+    # En passant
+    if board.ep_square is not None:
+        ep_rank = chess.square_rank(board.ep_square)
+        ep_file = chess.square_file(board.ep_square)
+        arr[17, ep_rank, ep_file] = 1.0
     return torch.from_numpy(arr)
 
 # ── training loop ───────────────────────────────────────────────────────────

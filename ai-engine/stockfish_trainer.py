@@ -1,76 +1,80 @@
 import os
 import json
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from ChessNet import ChessNet
+from ArchiveAlpha import encode_board
 import chess
-import chess.engine
 
 
-# ===== Dataset =====
-class FENDataset(Dataset):
-    def __init__(self, fens, engine_path, time_limit=0.2, mapping_path="move_mapping.json"):
-        self.fens = fens
-        self.time_limit = time_limit
-
-        # === încărcăm mapping-ul mutărilor ===
+# ===== Dataset using pre-computed Stockfish labels =====
+class PrecomputedDataset(Dataset):
+    """Fast dataset that loads pre-computed Stockfish labels (no Stockfish at runtime)."""
+    def __init__(self, labels_path="stockfish_labels.json", mapping_path="move_mapping.json"):
         with open(mapping_path) as f:
             self.idx_to_move = json.load(f)
         self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
-        self.n_moves = len(self.idx_to_move)   # număr real de mutări
+        self.n_moves = len(self.idx_to_move)
 
-        # === pornim Stockfish dacă există ===
+        with open(labels_path) as f:
+            raw = json.load(f)
+
+        # Filter: keep only valid (fen → move) pairs
+        self.samples = [(fen, move) for fen, move in raw.items() if move is not None and move in self.move_to_idx]
+        print(f"📦 Loaded {len(self.samples)} pre-computed training samples")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        fen, move_uci = self.samples[idx]
+        board = chess.Board(fen)
+        board_tensor = encode_board(board)  # [18, 8, 8]
+        move_idx = self.move_to_idx[move_uci]
+        return board_tensor, move_idx
+
+
+# ===== Fallback: live Stockfish dataset (slow but works without pre-computation) =====
+class LiveStockfishDataset(Dataset):
+    """Slow dataset that queries Stockfish at runtime for each FEN."""
+    def __init__(self, fens, engine_path, time_limit=0.05, mapping_path="move_mapping.json"):
+        self.fens = fens
+        self.time_limit = time_limit
+
+        with open(mapping_path) as f:
+            self.idx_to_move = json.load(f)
+        self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
+        self.n_moves = len(self.idx_to_move)
+
         if os.path.exists(engine_path):
             self.engine = chess.engine.SimpleEngine.popen_uci(engine_path)
         else:
             self.engine = None
-            print(f"Warning: Stockfish nu a fost găsit la {engine_path}. Folosim mutări dummy.")
+            print(f"⚠️ Stockfish not found at {engine_path}")
 
     def __len__(self):
         return len(self.fens)
 
     def __getitem__(self, idx):
         fen = self.fens[idx]
-        board_tensor = self.fen_to_tensor(fen)
+        board = chess.Board(fen)
+        board_tensor = encode_board(board)
 
-        best_move = self.get_stockfish_move(fen)
-        move_idx = self.move_to_index(best_move)
-
+        best_move = self._get_stockfish_move(fen)
+        move_idx = self.move_to_idx.get(best_move, 0)
         return board_tensor, move_idx
 
-    def fen_to_tensor(self, fen):
-        piece_to_idx = {
-            "P": 0, "N": 1, "B": 2, "R": 3, "Q": 4, "K": 5,
-            "p": 6, "n": 7, "b": 8, "r": 9, "q": 10, "k": 11
-        }
-        board_tensor = torch.zeros(12, 8, 8, dtype=torch.float32)
-        rows = fen.split(" ")[0].split("/")
-        for i, row in enumerate(rows):
-            col = 0
-            for c in row:
-                if c.isdigit():
-                    col += int(c)
-                else:
-                    board_tensor[piece_to_idx[c], i, col] = 1.0
-                    col += 1
-        return board_tensor
-
-    def get_stockfish_move(self, fen):
+    def _get_stockfish_move(self, fen):
         if self.engine is None:
             return "0000"
         board = chess.Board(fen)
         if board.is_game_over():
             return "0000"
         result = self.engine.play(board, chess.engine.Limit(time=self.time_limit))
-        if result.move is None:
-            return "0000"
-        return result.move.uci()
-
-    def move_to_index(self, move_uci: str) -> int:
-        # fallback la index 0 dacă mutarea nu există în mapping
-        return self.move_to_idx.get(move_uci, 0)
+        return result.move.uci() if result.move else "0000"
 
     def __del__(self):
         if hasattr(self, "engine") and self.engine is not None:
@@ -85,68 +89,107 @@ def load_fens_from_files(filepath="generated_games.json"):
     return []
 
 
-# ===== Parametri =====
-batch_size = 256      # mic pentru debug
-epochs = 2           # mic pentru debug
-lr = 1e-3
-engine_path = "/opt/homebrew/bin/stockfish"
-model_path = "chessnet.pth"
+# ===== Main entry point =====
+if __name__ == '__main__':
+    import chess.engine
+    import argparse
 
-# ===== Încarcăm FEN-urile =====
-fens = load_fens_from_files("generated_games.json")
-if len(fens) == 0:
-    raise ValueError("Fișierul generated_games.json este gol sau nu există!")
+    parser = argparse.ArgumentParser(description='Stockfish Trainer')
+    parser.add_argument('--epochs', type=int, default=5, help='Number of training epochs')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
+    args = parser.parse_args()
 
-dataset = FENDataset(fens, engine_path=engine_path)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # ===== Parameters =====
+    batch_size = args.batch_size
+    epochs = args.epochs
+    lr = args.lr
+    engine_path = "/opt/homebrew/bin/stockfish"
+    model_path = "chessnet.pth"
+    labels_path = "stockfish_labels.json"
 
-# ===== Model, loss, optimizer =====
-n_moves = dataset.n_moves   # determinat din mapping
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print(f"Device folosit: {device}, număr mutări posibile: {n_moves}")
+    # ===== Choose dataset: pre-computed (fast) or live (slow) =====
+    if os.path.exists(labels_path):
+        print("🚀 Using pre-computed Stockfish labels (FAST mode)")
+        dataset = PrecomputedDataset(labels_path=labels_path)
+    else:
+        print("🐌 Pre-computed labels not found. Using live Stockfish (SLOW mode)")
+        print("   Run 'python precompute_stockfish.py' first for 10-50x faster training!")
+        fens = load_fens_from_files("generated_games.json")
+        if len(fens) == 0:
+            raise ValueError("generated_games.json is empty or does not exist!")
+        dataset = LiveStockfishDataset(fens, engine_path=engine_path)
 
-model = ChessNet(n_moves).to(device)
-optimizer = optim.Adam(model.parameters(), lr=lr)
-criterion = nn.CrossEntropyLoss()
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
 
-# ===== Încarcă model existent dacă există =====
-if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    print("Modelul existent a fost încărcat, continuăm antrenarea.")
+    # ===== Model, loss, optimizer =====
+    n_moves = dataset.n_moves
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Device: {device}, possible moves: {n_moves}, samples: {len(dataset)}, batches/epoch: {len(dataloader)}")
 
-save_every = 256
-processed = 0
+    model = ChessNet(n_moves).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+    criterion = nn.CrossEntropyLoss()
 
-# ===== Antrenare =====
-for epoch in range(epochs):
-    total_loss = 0
-    print(f"===== EPOCH {epoch+1} =====")
-    for i, (X, y) in enumerate(dataloader):
-        X, y = X.to(device), y.to(device)
+    # ===== Load existing model if available =====
+    if os.path.exists(model_path):
+        try:
+            model.load_state_dict(torch.load(model_path, map_location=device))
+            print("✅ Existing model loaded, continuing training.")
+        except (RuntimeError, KeyError) as e:
+            print(f"⚠️ Could not load old model: {e}")
+            print("Architecture changed — training from scratch.")
 
-        optimizer.zero_grad()
-        outputs = model(X)
-        loss = criterion(outputs, y)
-        loss.backward()
-        optimizer.step()
+    # ===== Training =====
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        correct = 0
+        total_samples = 0
 
-        total_loss += loss.item()
-        processed += X.size(0)  # numărul de FEN-uri procesate
+        print(f"===== EPOCH {epoch+1}/{epochs} =====")
+        sys.stdout.flush()
 
-        print(
-            f"Batch {i+1}/{len(dataloader)} | "
-            f"Loss: {loss.item():.4f} | "
-            f"Outputs sum: {outputs.sum().item():.1f} | "
-            f"Labels sum: {y.sum().item()} | "
-            f"FEN processed: {processed}"
-        )
+        for i, (X, y) in enumerate(dataloader):
+            X, y = X.to(device), y.to(device)
 
-        if processed % save_every == 0:
-            torch.save(model.state_dict(), model_path)
-            print(f"Model salvat după {processed} FEN-uri procesate.")
+            optimizer.zero_grad()
+            outputs = model(X)
+            loss = criterion(outputs, y)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
 
-    print(f"Epoch {epoch+1} - Average Loss: {total_loss/len(dataloader):.4f}\n")
+            total_loss += loss.item()
+            total_samples += X.size(0)
 
-# ===== Salvăm modelul =====
-torch.save(model.state_dict(), model_path)
-print(f"Model salvat în '{model_path}'")
+            # Accuracy tracking
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(y).sum().item()
+
+            if (i + 1) % 10 == 0 or (i + 1) == len(dataloader):
+                acc = 100.0 * correct / total_samples
+                avg_loss = total_loss / (i + 1)
+                print(
+                    f"Batch {i+1}/{len(dataloader)} | "
+                    f"Loss: {loss.item():.4f} | "
+                    f"Avg Loss: {avg_loss:.4f} | "
+                    f"Acc: {acc:.1f}% | "
+                    f"FEN processed: {total_samples}"
+                )
+                sys.stdout.flush()
+
+        scheduler.step()
+        avg_loss = total_loss / len(dataloader)
+        acc = 100.0 * correct / total_samples
+        print(f"Epoch {epoch+1}/{epochs} - Avg Loss: {avg_loss:.4f} - Accuracy: {acc:.1f}%\n")
+        sys.stdout.flush()
+
+        # Save after each epoch
+        torch.save(model.state_dict(), model_path)
+        print(f"💾 Model saved after epoch {epoch+1}")
+        sys.stdout.flush()
+
+    print(f"✅ Training complete! Model saved to '{model_path}'")
+    sys.stdout.flush()

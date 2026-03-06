@@ -19,29 +19,41 @@ class ChessAI:
     def __init__(self, is_white=True, default_strategy: Optional[str] = None):
         self.is_white = is_white
         self.board = chess.Board()
+        # Select device: prefer MPS on Mac, then CUDA, then CPU
+        if torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        elif torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
+
         self.model = ChessNet(len(move_list))
+        self.model.to(self.device)
         model_path = "chessnet.pth"
         if os.path.exists(model_path):
             try:
-
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                net_b = ChessNet(len(move_list))
-                net_b.to(device)
-
-                print(f"✅ Model încărcat cu succes din {model_path}")
-            except RuntimeError as e:
-                print(f"⚠️ Nu s-a putut încărca modelul din {model_path}: {e}")
-                print("⚠️ Se va antrena de la zero.")
+                state_dict = torch.load(model_path, map_location=self.device)
+                self.model.load_state_dict(state_dict)
+                print(f"Model loaded successfully from {model_path}")
+            except (RuntimeError, KeyError) as e:
+                print(f"⚠️ Could not load model from {model_path}: {e}")
+                print("Architecture mismatch — training from scratch.")
+                # Remove old incompatible checkpoint
+                os.rename(model_path, model_path + ".old")
+                print(f"Old model backed up to {model_path}.old")
         else:
-            print(f"⚠️ Modelul nu a fost găsit ({model_path}) — se va antrena de la zero.")
+            print(f"Model not found ({model_path}) - training from scratch.")
 
         if os.path.exists(engine_path):
             self.engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+            # try:
+            #     self.engine.configure({"Skill Level": 10})
+            # except Exception as e:
+            #     print(f"⚠️ Nu s-a putut seta Skill Level: {e}")
         else:
             self.engine = None
             print(f"⚠️ Stockfish nu a fost găsit la {engine_path}. Strategy 'stockfish' nu va fi disponibil.")
 
-        import json
         with open("move_mapping.json") as f:
             self.idx_to_move = json.load(f)
         self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
@@ -63,7 +75,7 @@ class ChessAI:
         if strategy is None:
             strategy = random.choices(
                 ['epsilon', 'model', 'minimax', 'stockfish'],
-                weights=[10.0, 60.0, 0.0, 30.0],
+                weights=[10.0, 0.0, 0.0, 90.0],
                 k=1
             )[0]
 
@@ -75,9 +87,17 @@ class ChessAI:
             return self.select_move_minimax(board)
         elif strategy == 'stockfish':
             return self.get_best_move_from_stockfish(board)
+        elif strategy == 'student':
+            weights = {'epsilon': 20, 'model': 80, 'stockfish': 0 , 'minimax': 0}
+            sub_strategy = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+            return self.select_move(board, strategy=sub_strategy)
+        elif strategy == 'teacher':
+            weights = {'epsilon': 0, 'model': 20, 'stockfish': 80, 'minimax': 0}
+            sub_strategy = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+            return self.select_move(board, strategy=sub_strategy)
         return None
 
-    def get_best_move_from_stockfish(self, board: chess.Board, time_limit: float = 0.1) -> Optional[chess.Move]:
+    def get_best_move_from_stockfish(self, board: chess.Board, time_limit: float = 0.005) -> Optional[chess.Move]:
         if self.engine is None:
             return random.choice(list(board.legal_moves))
         if board.is_game_over():
@@ -87,30 +107,36 @@ class ChessAI:
 
     def get_best_move_from_model(self, board: chess.Board) -> Optional[chess.Move]:
         self.board = board
-        board_tensor = encode_board(board).unsqueeze(0)
+        board_tensor = encode_board(board).unsqueeze(0).to(self.device)
 
         legal_moves = list(board.legal_moves)
-        legal_indices = [self.move_to_index(m.uci()) for m in legal_moves]
+        if not legal_moves:
+            return None
 
         with torch.no_grad():
             prediction = self.model(board_tensor).squeeze(0)
 
-        rand_val = random.random()
-        if rand_val < self.epsilon:
+        output_size = prediction.shape[0]
+        legal_indices = [self.move_to_index(m.uci()) for m in legal_moves if self.move_to_index(m.uci()) < output_size]
+
+        if not legal_indices:
+            return random.choice(legal_moves)
+
+        if random.random() < self.epsilon:
             return random.choice(legal_moves)
 
         best_idx = max(legal_indices, key=lambda i: prediction[i].item())
         best_move = chess.Move.from_uci(self.idx_to_move[best_idx])
 
         if best_move not in self.board.legal_moves:
-            print(f"⚠️ Predicted move {best_move} is not legal in the current board position.")
             return random.choice(legal_moves)
 
         return best_move
 
     def evaluate_board(self, board: chess.Board) -> float:
+        my_color = chess.WHITE if self.is_white else chess.BLACK
         if board.is_checkmate():
-            return float('-inf') if board.turn == self.is_white else float('inf')
+            return float('-inf') if board.turn == my_color else float('inf')
 
         piece_values = {
             chess.PAWN: 1.0,
@@ -138,9 +164,10 @@ class ChessAI:
                 value += sign * val
 
         if board.is_check():
-            value += 0.5 if board.turn != self.is_white else -0.5
+            value += 0.5 if board.turn != my_color else -0.5
 
-        return value
+        # Evaluation is from white's perspective; flip for black AI
+        return value if self.is_white else -value
 
     def select_move_minimax(self, board: chess.Board, depth: int = 2) -> Optional[chess.Move]:
         def minimax(board_, depth_, alpha, beta, maximizing_player):
@@ -175,5 +202,5 @@ class ChessAI:
                         break
                 return min_eval, best_move_
 
-        _, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn)
+        _, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn == (chess.WHITE if self.is_white else chess.BLACK))
         return best_move
