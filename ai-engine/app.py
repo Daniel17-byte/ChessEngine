@@ -603,25 +603,61 @@ def run_archive_alpha_training(epochs):
 
             print(f"🔵 Archive Alpha: {line}")
 
-            # Parse training output
-            if "Epoch" in line:
-                try:
-                    epoch_match = re.search(r'Epoch\s+(\d+)/(\d+)', line)
-                    if epoch_match:
-                        epoch_count = int(epoch_match.group(1))
-                        total = int(epoch_match.group(2))
-                        training_state["epochs"] = epoch_count
-                        training_state["max_epochs"] = total
+            try:
+                # Parse Epoch header: "===== EPOCH 1/5 ====="
+                epoch_match = re.search(r'EPOCH\s+(\d+)/(\d+)', line)
+                if epoch_match:
+                    epoch_count = int(epoch_match.group(1))
+                    total = int(epoch_match.group(2))
+                    training_state["epochs"] = epoch_count
+                    training_state["max_epochs"] = total
 
-                    # Extract loss
-                    loss_match = re.search(r'loss[\s=:]*([0-9.]+)', line, re.IGNORECASE)
-                    if loss_match:
-                        training_state["loss_value"] = float(loss_match.group(1))
-
-                    training_state["current_status"] = f"Archive Alpha: Epoch {epoch_count}/{epochs} | Loss: {training_state['loss_value']:.4f}"
+                # Parse Epoch summary: "Epoch 1/5 - Avg Loss: 2.3 - Accuracy: 15.2%"
+                epoch_summary = re.search(r'Epoch\s+(\d+)/(\d+)\s*-\s*Avg Loss:\s*([0-9.]+)\s*-\s*Accuracy:\s*([0-9.]+)%', line)
+                if epoch_summary:
+                    epoch_count = int(epoch_summary.group(1))
+                    training_state["epochs"] = epoch_count
+                    training_state["max_epochs"] = int(epoch_summary.group(2))
+                    training_state["loss_value"] = float(epoch_summary.group(3))
+                    training_state["accuracy"] = float(epoch_summary.group(4))
+                    training_state["current_status"] = (
+                        f"Archive Alpha: Epoch {epoch_count}/{training_state['max_epochs']} | "
+                        f"Loss: {training_state['loss_value']:.4f} | "
+                        f"Acc: {training_state['accuracy']:.1f}%"
+                    )
                     emit_training_status()
-                except Exception as e:
-                    print(f"Parse error: {e}")
+                    continue
+
+                # Parse Avg Loss from any line
+                avg_loss_match = re.search(r'Avg Loss:\s*([0-9.]+)', line)
+                if avg_loss_match:
+                    training_state["loss_value"] = float(avg_loss_match.group(1))
+
+                # Parse accuracy
+                acc_match = re.search(r'Acc(?:uracy)?:\s*([0-9.]+)%', line)
+                if acc_match:
+                    training_state["accuracy"] = float(acc_match.group(1))
+
+                # Parse Batch/chunk progress
+                batch_match = re.search(r'Batch\s+(\d+)', line)
+                if batch_match:
+                    batch_num = int(batch_match.group(1))
+                    training_state["current_status"] = (
+                        f"Archive Alpha: Epoch {epoch_count}/{training_state['max_epochs']} | "
+                        f"Chunk {batch_num} | "
+                        f"Loss: {training_state['loss_value']:.4f} | "
+                        f"Acc: {training_state['accuracy']:.1f}%"
+                    )
+                    if batch_num % 5 == 0:
+                        emit_training_status()
+
+                # Parse FEN processed count
+                fen_match = re.search(r'FEN processed:\s*(\d+)', line)
+                if fen_match:
+                    training_state["games_played"] = int(fen_match.group(1))
+
+            except Exception as e:
+                print(f"Parse error: {e}")
 
         try:
             process.wait(timeout=10)

@@ -1,34 +1,17 @@
 import argparse
+import sys
 import chess
 import chess.pgn
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.utils
 from ChessNet import ChessNet
 from torch.utils.data import Dataset, DataLoader
 import os
 import json
-from torch.cuda.amp import GradScaler, autocast
-import random
 
 # ── dataset utilities ─────────────────────────────────────────────────────────
-
-def load_samples(pgn_path, color):
-    """
-    Scan the PGN and collect (fen, move_uci) pairs for the given side to move.
-    """
-    samples = []
-    with open(pgn_path, 'r', encoding='utf-8') as f:
-        while True:
-            game = chess.pgn.read_game(f)
-            if game is None:
-                break
-            board = game.board()
-            for move in game.mainline_moves():
-                if board.turn == color:
-                    samples.append((board.fen(), move.uci()))
-                board.push(move)
-    return samples
 
 class ChessDataset(Dataset):
     def __init__(self, samples, move2idx):
@@ -36,7 +19,8 @@ class ChessDataset(Dataset):
         samples: list of (fen, uci)
         move2idx: dict mapping uci→int label
         """
-        self.samples = samples
+        # Filter out moves not in our mapping
+        self.samples = [(fen, uci) for fen, uci in samples if uci in move2idx]
         self.move2idx = move2idx
 
     def __len__(self):
@@ -45,7 +29,7 @@ class ChessDataset(Dataset):
     def __getitem__(self, idx):
         fen, uci = self.samples[idx]
         board = chess.Board(fen)
-        x = encode_board(board)              # [12×8×8] float tensor
+        x = encode_board(board)              # [18×8×8] float tensor
         y = self.move2idx[uci]               # integer label
         return x, y
 
@@ -87,147 +71,167 @@ def encode_board(board):
         arr[17, ep_rank, ep_file] = 1.0
     return torch.from_numpy(arr)
 
-# ── training loop ───────────────────────────────────────────────────────────
-
-def train(model, loader, device, epochs=5, lr=1e-3):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    model.to(device)
-    scaler = GradScaler() if device.type == 'cuda' else None
-    for ep in range(1, epochs+1):
-        print(f"\nEpoch {ep}/{epochs} - training on {len(loader.dataset)} samples in {len(loader)} batches")
-        model.train()
-        total_loss = 0.0
-        for batch_idx, (xb, yb) in enumerate(loader, start=1):
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            if scaler:
-                with autocast():
-                    logits = model(xb)
-                    loss = criterion(logits, yb)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                logits = model(xb)
-                loss = criterion(logits, yb)
-                loss.backward()
-                optimizer.step()
-            if batch_idx % 10 == 0:
-                print(f"  Batch {batch_idx}/{len(loader)} - loss: {loss.item():.4f}")
-            total_loss += loss.item() * xb.size(0)
-        avg = total_loss / len(loader.dataset)
-        print(f"Epoch {ep}/{epochs}  –  loss: {avg:.4f}")
-
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--pgn',        default='lichess_db.pgn',
-                   help='PGN file of games')
-    p.add_argument('--epochs',     type=int, default=5)
-    p.add_argument('--batch_size', type=int, default=128)
-    p.add_argument('--chunk_size', type=int, default=100,
-                   help='number of games to process per chunk')
-    p.add_argument('--resume_chunk', type=int, default=0,
-                   help='chunk index to resume training from (0 to start fresh)')
-    p.add_argument('--num_workers', type=int, default=4,
-                   help='number of DataLoader worker processes')
+    p = argparse.ArgumentParser(description='Train on Lichess PGN archive')
+    p.add_argument('--pgn',          default='lichess_db.pgn', help='PGN file of games')
+    p.add_argument('--epochs',       type=int, default=5)
+    p.add_argument('--batch-size',   type=int, default=256)
+    p.add_argument('--chunk-size',   type=int, default=200, help='Games per chunk')
+    p.add_argument('--lr',           type=float, default=1e-3)
+    p.add_argument('--model-path',   default='chessnet.pth', help='Path to save/load model')
     args = p.parse_args()
-    print(f"Arguments: pgn={args.pgn}, epochs={args.epochs}, batch_size={args.batch_size}, num_workers={args.num_workers}")
 
-    # Load static move mappings from JSON file
+    # ── Load move mapping ─────────────────────────────────────────────────
     print("Loading move mappings from move_mapping.json...")
+    sys.stdout.flush()
     with open('move_mapping.json', 'r', encoding='utf-8') as fmap:
         move_list = json.load(fmap)
-    w2i = {m: i for i, m in enumerate(move_list)}
-    b2i = w2i
-    print(f"Loaded {len(move_list)} moves from mapping file.")
+    move2idx = {m: i for i, m in enumerate(move_list)}
+    n_moves = len(move_list)
+    print(f"Loaded {n_moves} moves from mapping file.")
+    sys.stdout.flush()
 
-    # Initialize device and networks
-    # Select device: prefer MPS on Mac, then CUDA, then CPU
+    # ── Check PGN file ────────────────────────────────────────────────────
+    if not os.path.exists(args.pgn):
+        print(f"❌ PGN file not found: {args.pgn}")
+        print("Download a Lichess database from https://database.lichess.org/")
+        sys.stdout.flush()
+        sys.exit(1)
+
+    # ── Device ────────────────────────────────────────────────────────────
     if torch.backends.mps.is_available():
         device = torch.device('mps')
     elif torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
-    print(f"Using device: {device}")
-    net_w = ChessNet(len(move_list))
-    net_b = ChessNet(len(move_list))
-    net_w.to(device)
-    net_b.to(device)
+    print(f"Device: {device}, moves: {n_moves}")
+    sys.stdout.flush()
 
-    # Determine starting chunk and load checkpoint if resuming
-    chunk_idx = args.resume_chunk
-    if args.resume_chunk > 0:
-        # Load checkpoint for both models
-        ckpt_w = f'trained_model_white_chunk{chunk_idx}.pth'
-        ckpt_b = f'trained_model_black_chunk{chunk_idx}.pth'
-        if os.path.exists(ckpt_w) and os.path.exists(ckpt_b):
-            print(f"Resuming from chunk {chunk_idx}: loading {ckpt_w} and {ckpt_b}")
-            state_w = torch.load(ckpt_w, map_location=device)
-            state_b = torch.load(ckpt_b, map_location=device)
-            net_w.load_state_dict(state_w, strict=False)
-            net_b.load_state_dict(state_b, strict=False)
-            print("✅ Checkpoint loaded.")
-        else:
-            print(f"⚠️ Checkpoints for chunk {chunk_idx} not found, starting fresh.")
+    # ── Single shared model (consistent with rest of app) ─────────────────
+    model = ChessNet(n_moves).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    criterion = nn.CrossEntropyLoss()
 
-    # Chunked training over PGN
-    with open(args.pgn, 'r', encoding='utf-8') as f:
-        # Skip already-processed games
-        games_to_skip = args.resume_chunk * args.chunk_size
-        for _ in range(games_to_skip):
-            if chess.pgn.read_game(f) is None:
-                break
-        while True:
-            chunk_idx += 1
-            games = []
-            for _ in range(args.chunk_size):
-                g = chess.pgn.read_game(f)
-                if g is None:
+    # Load existing model if available
+    if os.path.exists(args.model_path):
+        try:
+            model.load_state_dict(torch.load(args.model_path, map_location=device))
+            print(f"✅ Existing model loaded from {args.model_path}")
+        except (RuntimeError, KeyError) as e:
+            print(f"⚠️ Could not load old model: {e}")
+            print("Architecture changed — training from scratch.")
+    sys.stdout.flush()
+
+    # ── Chunked training over PGN ─────────────────────────────────────────
+    for epoch in range(args.epochs):
+        print(f"===== EPOCH {epoch+1}/{args.epochs} =====")
+        sys.stdout.flush()
+
+        epoch_loss = 0.0
+        epoch_correct = 0
+        epoch_total = 0
+        chunk_idx = 0
+
+        with open(args.pgn, 'r', encoding='utf-8') as f:
+            while True:
+                # Read a chunk of games
+                games = []
+                for _ in range(args.chunk_size):
+                    g = chess.pgn.read_game(f)
+                    if g is None:
+                        break
+                    games.append(g)
+
+                if not games:
                     break
-                games.append(g)
-            if not games:
-                break
-            # collect samples for this chunk
-            white_samples = []
-            black_samples = []
-            for game in games:
-                board = game.board()
-                for move in game.mainline_moves():
-                    if board.turn == chess.WHITE:
-                        white_samples.append((board.fen(), move.uci()))
-                    else:
-                        black_samples.append((board.fen(), move.uci()))
-                    board.push(move)
-            print(f"Chunk: {len(games)} games, {len(white_samples)} white samples, {len(black_samples)} black samples")
-            # create loaders and train one epoch per chunk
-            w_loader = DataLoader(
-                ChessDataset(white_samples, w2i),
-                batch_size=args.batch_size, shuffle=True,
-                num_workers=args.num_workers, pin_memory=True,
-                prefetch_factor=2, persistent_workers=True
-            )
-            b_loader = DataLoader(
-                ChessDataset(black_samples, b2i),
-                batch_size=args.batch_size, shuffle=True,
-                num_workers=args.num_workers, pin_memory=True,
-                prefetch_factor=2, persistent_workers=True
-            )
-            train(net_w, w_loader, device, epochs=1)
-            train(net_b, b_loader, device, epochs=1)
 
-            if chunk_idx % 10 == 0:
-                torch.save(net_w.state_dict(), f'trained_model_white_chunk{chunk_idx}.pth')
-                torch.save(net_b.state_dict(), f'trained_model_black_chunk{chunk_idx}.pth')
-                print(f"Saved models at chunk {chunk_idx}")
+                chunk_idx += 1
 
-    # Save final models
-    torch.save(net_w.state_dict(), 'trained_model_white.pth')
-    torch.save(net_b.state_dict(), 'trained_model_black.pth')
-    print("Saved final models.")
+                # Collect (fen, move) samples from ALL positions, both colors
+                samples = []
+                for game in games:
+                    board = game.board()
+                    for move in game.mainline_moves():
+                        uci = move.uci()
+                        if uci in move2idx:
+                            samples.append((board.fen(), uci))
+                        board.push(move)
+
+                if not samples:
+                    continue
+
+                # Create DataLoader for this chunk
+                dataset = ChessDataset(samples, move2idx)
+                loader = DataLoader(
+                    dataset,
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    num_workers=0,
+                    pin_memory=True
+                )
+
+                # Train on this chunk
+                model.train()
+                chunk_loss = 0.0
+                chunk_correct = 0
+                chunk_total = 0
+
+                for batch_idx, (xb, yb) in enumerate(loader):
+                    xb, yb = xb.to(device), yb.to(device)
+
+                    optimizer.zero_grad()
+                    logits = model(xb)
+                    loss = criterion(logits, yb)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+
+                    chunk_loss += loss.item()
+                    chunk_total += xb.size(0)
+                    _, predicted = logits.max(1)
+                    chunk_correct += predicted.eq(yb).sum().item()
+
+                epoch_loss += chunk_loss
+                epoch_correct += chunk_correct
+                epoch_total += chunk_total
+
+                chunk_acc = 100.0 * chunk_correct / max(chunk_total, 1)
+                chunk_avg_loss = chunk_loss / max(len(loader), 1)
+
+                # Print progress every chunk
+                if chunk_idx % 5 == 0 or len(games) < args.chunk_size:
+                    total_acc = 100.0 * epoch_correct / max(epoch_total, 1)
+                    print(
+                        f"Batch {chunk_idx} | "
+                        f"Chunk: {len(games)} games, {len(samples)} positions | "
+                        f"Loss: {chunk_avg_loss:.4f} | "
+                        f"Avg Loss: {epoch_loss / max(chunk_idx, 1):.4f} | "
+                        f"Acc: {total_acc:.1f}% | "
+                        f"FEN processed: {epoch_total}"
+                    )
+                    sys.stdout.flush()
+
+        # End of epoch
+        if epoch_total > 0:
+            avg_loss = epoch_loss / max(chunk_idx, 1)
+            acc = 100.0 * epoch_correct / epoch_total
+            print(f"Epoch {epoch+1}/{args.epochs} - Avg Loss: {avg_loss:.4f} - Accuracy: {acc:.1f}% - Positions: {epoch_total}")
+        else:
+            print(f"Epoch {epoch+1}/{args.epochs} - No positions processed")
+        sys.stdout.flush()
+
+        # Save after each epoch
+        torch.save(model.state_dict(), args.model_path)
+        print(f"💾 Model saved to {args.model_path}")
+        sys.stdout.flush()
+
+    print(f"✅ Training complete! Model saved to '{args.model_path}'")
+    sys.stdout.flush()
+
 
 if __name__ == '__main__':
     main()
+

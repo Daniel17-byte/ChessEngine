@@ -59,7 +59,7 @@ class ChessAI:
         self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
 
         self.model.eval()
-        self.epsilon = 0.1
+        self.epsilon = 0.05
         self.default_strategy = default_strategy
 
     def move_to_index(self, move_uci: str) -> int:

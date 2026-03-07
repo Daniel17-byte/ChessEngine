@@ -96,7 +96,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Stockfish Trainer')
     parser.add_argument('--epochs', type=int, default=5, help='Number of training epochs')
-    parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=512, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     args = parser.parse_args()
 
