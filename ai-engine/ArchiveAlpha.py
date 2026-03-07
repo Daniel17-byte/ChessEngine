@@ -77,8 +77,8 @@ def main():
     p = argparse.ArgumentParser(description='Train on Lichess PGN archive')
     p.add_argument('--pgn',          default='lichess_db.pgn', help='PGN file of games')
     p.add_argument('--epochs',       type=int, default=5)
-    p.add_argument('--batch-size',   type=int, default=256)
-    p.add_argument('--chunk-size',   type=int, default=200, help='Games per chunk')
+    p.add_argument('--batch-size',   type=int, default=64)
+    p.add_argument('--chunk-size',   type=int, default=100, help='Games per chunk')
     p.add_argument('--lr',           type=float, default=1e-3)
     p.add_argument('--model-path',   default='chessnet.pth', help='Path to save/load model')
     args = p.parse_args()
@@ -133,6 +133,7 @@ def main():
         epoch_loss = 0.0
         epoch_correct = 0
         epoch_total = 0
+        epoch_batches = 0
         chunk_idx = 0
 
         with open(args.pgn, 'r', encoding='utf-8') as f:
@@ -170,7 +171,7 @@ def main():
                     batch_size=args.batch_size,
                     shuffle=True,
                     num_workers=0,
-                    pin_memory=True
+                    pin_memory=False
                 )
 
                 # Train on this chunk
@@ -197,6 +198,7 @@ def main():
                 epoch_loss += chunk_loss
                 epoch_correct += chunk_correct
                 epoch_total += chunk_total
+                epoch_batches += len(loader)
 
                 chunk_acc = 100.0 * chunk_correct / max(chunk_total, 1)
                 chunk_avg_loss = chunk_loss / max(len(loader), 1)
@@ -204,19 +206,26 @@ def main():
                 # Print progress every chunk
                 if chunk_idx % 5 == 0 or len(games) < args.chunk_size:
                     total_acc = 100.0 * epoch_correct / max(epoch_total, 1)
+                    total_avg_loss = epoch_loss / max(epoch_batches, 1)
                     print(
                         f"Batch {chunk_idx} | "
                         f"Chunk: {len(games)} games, {len(samples)} positions | "
                         f"Loss: {chunk_avg_loss:.4f} | "
-                        f"Avg Loss: {epoch_loss / max(chunk_idx, 1):.4f} | "
+                        f"Avg Loss: {total_avg_loss:.4f} | "
                         f"Acc: {total_acc:.1f}% | "
                         f"FEN processed: {epoch_total}"
                     )
                     sys.stdout.flush()
 
+                # Save checkpoint every 50 chunks
+                if chunk_idx % 50 == 0:
+                    torch.save(model.state_dict(), args.model_path)
+                    print(f"💾 Checkpoint saved at chunk {chunk_idx}")
+                    sys.stdout.flush()
+
         # End of epoch
         if epoch_total > 0:
-            avg_loss = epoch_loss / max(chunk_idx, 1)
+            avg_loss = epoch_loss / max(epoch_batches, 1)
             acc = 100.0 * epoch_correct / epoch_total
             print(f"Epoch {epoch+1}/{args.epochs} - Avg Loss: {avg_loss:.4f} - Accuracy: {acc:.1f}% - Positions: {epoch_total}")
         else:

@@ -43,6 +43,22 @@ def emit_training_status():
     """Broadcast training state to all connected WebSocket clients"""
     socketio.emit("training_status", training_state)
 
+# ELO estimation state
+elo_state = {
+    "is_running": False,
+    "current_level": 0,
+    "max_level": 10,
+    "games_per_level": 20,
+    "current_game": 0,
+    "results": {},
+    "estimated_elo": None,
+    "status": "idle"
+}
+
+def emit_elo_status():
+    """Broadcast ELO estimation state to all connected WebSocket clients"""
+    socketio.emit("elo_status", elo_state)
+
 def friendly_strategy(name):
     """Convert strategy ID to display name"""
     return {"model": "Danibot", "stockfish": "Stockfish", "random": "Random"}.get(name, name)
@@ -296,8 +312,8 @@ def get_strategies():
             {
                 'id': 'archive_alpha',
                 'name': 'Archive Alpha',
-                'description': 'Train model using alpha-zero style self-play',
-                'recommended_epochs': 200
+                'description': 'Train model from a database of real Lichess games (121K+ games)',
+                'recommended_epochs': 3
             }
         ]
     })
@@ -677,10 +693,194 @@ def run_archive_alpha_training(epochs):
         print(f"❌ Archive Alpha error: {str(e)}")
         raise
 
+@app.route('/api/admin/elo/start', methods=['POST'])
+def start_elo_estimation():
+    """Start ELO estimation in background"""
+    global elo_state
+
+    if elo_state["is_running"]:
+        return jsonify({'error': 'ELO estimation already in progress'}), 400
+
+    data = request.get_json() or {}
+    games_per_level = data.get('games_per_level', 20)
+    max_level = data.get('max_level', 10)
+
+    elo_state["is_running"] = True
+    elo_state["games_per_level"] = games_per_level
+    elo_state["max_level"] = max_level
+    elo_state["current_level"] = 0
+    elo_state["current_game"] = 0
+    elo_state["results"] = {}
+    elo_state["estimated_elo"] = None
+    elo_state["status"] = "Starting ELO estimation..."
+    emit_elo_status()
+
+    thread = threading.Thread(target=run_elo_estimation, args=(games_per_level, max_level))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({'message': f'ELO estimation started: {games_per_level} games/level, levels 0-{max_level}'})
+
+@app.route('/api/admin/elo/stop', methods=['POST'])
+def stop_elo_estimation():
+    """Stop ELO estimation"""
+    global elo_state
+    elo_state["is_running"] = False
+    elo_state["status"] = "Stopped by user"
+    emit_elo_status()
+    return jsonify({'message': 'ELO estimation stopped'})
+
+@app.route('/api/admin/elo/status', methods=['GET'])
+def get_elo_status():
+    """Get current ELO estimation status"""
+    return jsonify(elo_state)
+
+def run_elo_estimation(games_per_level, max_level):
+    """Run ELO estimation in background thread"""
+    global elo_state
+    import chess.engine as ce
+
+    SKILL_TO_ELO = {
+        0: 800, 1: 900, 2: 1000, 3: 1050, 4: 1100,
+        5: 1200, 6: 1300, 7: 1400, 8: 1500, 9: 1600,
+        10: 1700, 11: 1800, 12: 1900, 13: 2000, 14: 2100,
+        15: 2200, 16: 2400, 17: 2600, 18: 2800, 19: 3000, 20: 3200,
+    }
+
+    engine_path = "/opt/homebrew/bin/stockfish"
+
+    try:
+        danibot = ChessAI(is_white=True, default_strategy='model')
+        danibot.epsilon = 0.0  # No random moves during evaluation
+
+        if not os.path.exists(engine_path):
+            elo_state["status"] = "❌ Stockfish not found"
+            elo_state["is_running"] = False
+            emit_elo_status()
+            return
+
+        engine = ce.SimpleEngine.popen_uci(engine_path)
+
+        for level in range(0, max_level + 1):
+            if not elo_state["is_running"]:
+                break
+
+            elo_state["current_level"] = level
+            elo_approx = SKILL_TO_ELO.get(level, "?")
+            elo_state["status"] = f"Testing vs Stockfish Level {level} (ELO ~{elo_approx})..."
+            emit_elo_status()
+
+            try:
+                engine.configure({"Skill Level": level})
+            except Exception:
+                pass
+
+            wins, draws, losses = 0, 0, 0
+
+            for g in range(games_per_level):
+                if not elo_state["is_running"]:
+                    break
+
+                elo_state["current_game"] = g + 1
+                elo_state["status"] = (
+                    f"Level {level} (ELO ~{elo_approx}) | "
+                    f"Game {g+1}/{games_per_level} | "
+                    f"Score: {wins}W/{draws}D/{losses}L"
+                )
+                if (g + 1) % 2 == 0:
+                    emit_elo_status()
+
+                board = chess.Board()
+                danibot_is_white = (g % 2 == 0)
+                move_count = 0
+
+                while not board.is_game_over() and move_count < 150:
+                    move_count += 1
+                    if (board.turn == chess.WHITE) == danibot_is_white:
+                        move = danibot.get_best_move_from_model(board)
+                        if move is None or move not in board.legal_moves:
+                            legal = list(board.legal_moves)
+                            move = legal[0] if legal else None
+                    else:
+                        result = engine.play(board, ce.Limit(time=0.01))
+                        move = result.move
+
+                    if move is None:
+                        break
+                    board.push(move)
+
+                result = board.result()
+                if result == "1-0":
+                    if danibot_is_white:
+                        wins += 1
+                    else:
+                        losses += 1
+                elif result == "0-1":
+                    if danibot_is_white:
+                        losses += 1
+                    else:
+                        wins += 1
+                else:
+                    draws += 1
+
+            total = wins + draws + losses
+            wr = (wins + 0.5 * draws) / max(total, 1)
+
+            elo_state["results"][str(level)] = {
+                "wins": wins, "draws": draws, "losses": losses,
+                "win_rate": round(wr, 3),
+                "elo": SKILL_TO_ELO.get(level, 0)
+            }
+            emit_elo_status()
+
+            print(f"⚡ ELO Test: Level {level} ({elo_approx}) → {wins}W/{draws}D/{losses}L (WR: {wr*100:.1f}%)")
+
+            # Stop early if getting crushed
+            if wr < 0.15 and level >= 2:
+                elo_state["status"] = f"Stopped at level {level} — Danibot outmatched"
+                break
+
+        engine.quit()
+        if hasattr(danibot, 'engine') and danibot.engine:
+            danibot.engine.quit()
+
+        # Calculate estimated ELO
+        best_level = 0
+        best_diff = float('inf')
+        for lvl_str, data in elo_state["results"].items():
+            diff = abs(data["win_rate"] - 0.5)
+            if diff < best_diff:
+                best_diff = diff
+                best_level = int(lvl_str)
+
+        base_elo = SKILL_TO_ELO.get(best_level, 800)
+        wr_at_best = elo_state["results"].get(str(best_level), {}).get("win_rate", 0.5)
+
+        if wr_at_best > 0.5 and best_level + 1 in SKILL_TO_ELO:
+            next_elo = SKILL_TO_ELO[best_level + 1]
+            estimated = base_elo + (next_elo - base_elo) * (wr_at_best - 0.5) * 2
+        elif wr_at_best < 0.5 and best_level - 1 in SKILL_TO_ELO:
+            prev_elo = SKILL_TO_ELO[best_level - 1]
+            estimated = base_elo - (base_elo - prev_elo) * (0.5 - wr_at_best) * 2
+        else:
+            estimated = base_elo
+
+        elo_state["estimated_elo"] = round(estimated)
+        elo_state["status"] = f"✅ Estimated ELO: {elo_state['estimated_elo']}"
+
+    except Exception as e:
+        elo_state["status"] = f"❌ Error: {str(e)}"
+        print(f"❌ ELO estimation error: {e}")
+    finally:
+        elo_state["is_running"] = False
+        emit_elo_status()
+
+
 @socketio.on('connect')
 def handle_connect():
     """Send current training status when a client connects"""
     emit('training_status', training_state)
+    emit('elo_status', elo_state)
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5050, host='0.0.0.0', allow_unsafe_werkzeug=True)
