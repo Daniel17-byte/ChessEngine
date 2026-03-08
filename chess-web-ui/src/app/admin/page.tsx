@@ -303,6 +303,7 @@ export default function AdminPage() {
                                                 disabled={trainingStatus?.is_training}
                                                 className={styles.select}
                                             >
+                                                <option value="from_scratch">♟️ From Scratch (Standard Start)</option>
                                                 <option value="endgames">Endgame Positions</option>
                                                 <option value="normal_games">Normal Games</option>
                                                 <option value="mixed">Mixed Positions</option>

@@ -20,19 +20,19 @@ public class GameController {
 
     @PostMapping("/move")
     public ResponseEntity<ApiResponse<Board>> makeMove(@RequestBody Move move) {
-        MoveResult valid = gameService.processMove(move);
-        if (valid.getStatus().name().equals(MoveStatus.VALID.name())) {
+        MoveResult result = gameService.processMove(move);
+        if (result.getStatus() != MoveStatus.INVALID) {
             return ResponseEntity
                     .status(HttpStatus.OK)
                     .body(new ApiResponse<>(
-                            "Move accepted",
+                            result.getMessage(),
                             gameService.getBoard()
                     ));
         } else {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
                     .body(new ApiResponse<>(
-                            "Invalid move",
+                            result.getMessage(),
                             null
                     ));
         }

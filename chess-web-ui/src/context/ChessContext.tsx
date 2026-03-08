@@ -1,15 +1,49 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { getBoard, makeMove, resetBoard } from "../api/chessApi";
+import React, { createContext, useContext, useState, useCallback } from "react";
+import { makeMove, resetBoard } from "../api/chessApi";
+import { recordWin, recordLoss, recordDraw } from "../api/statsApi";
+
+export enum GameType {
+    AI = "ai",
+    PVP = "pvp",
+}
+
+export enum PlayerColor {
+    WHITE = "white",
+    BLACK = "black",
+}
+
+export enum AiOpponent {
+    DANIBOT = "model",
+    STOCKFISH = "stockfish",
+}
+
+export type GameResult = "win" | "loss" | "draw" | null;
 
 interface ChessContextType {
     fen: string;
+    setFen: (fen: string) => void;
     isLoading: boolean;
-    makePlayerMove: (from: string, to: string) => Promise<boolean>;
+    makePlayerMove: (from: string, to: string, promotion?: string) => Promise<boolean>;
     resetGame: () => void;
     lastAiMove: string | null;
+    setLastAiMove: (move: string | null) => void;
     isGameOver: boolean;
+    gameResult: GameResult;
+    dismissGameResult: () => void;
+    boardFlipped: boolean;
+    toggleBoardFlip: () => void;
+    gameType: GameType;
+    playerColor: PlayerColor;
+    aiOpponent: AiOpponent;
+    setGameSettings: (gameType: GameType, playerColor: PlayerColor, aiOpponent?: AiOpponent) => void;
+    moveCount: number;
+    gameStarted: boolean;
+    setGameStarted: (started: boolean) => void;
+    isCheckmate: boolean;
+    isStalemate: boolean;
+    isCheck: boolean;
 }
 
 export const ChessContext = createContext<ChessContextType | undefined>(undefined);
@@ -19,31 +53,87 @@ export const ChessProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const [isLoading, setIsLoading] = useState(false);
     const [lastAiMove, setLastAiMove] = useState<string | null>(null);
     const [isGameOver, setIsGameOver] = useState(false);
+    const [gameResult, setGameResult] = useState<GameResult>(null);
+    const [boardFlipped, setBoardFlipped] = useState(false);
+    const [gameType, setGameType] = useState<GameType>(GameType.AI);
+    const [playerColor, setPlayerColor] = useState<PlayerColor>(PlayerColor.WHITE);
+    const [aiOpponent, setAiOpponent] = useState<AiOpponent>(AiOpponent.DANIBOT);
+    const [moveCount, setMoveCount] = useState(0);
+    const [gameStarted, setGameStarted] = useState(false);
+    const [isCheckmate, setIsCheckmate] = useState(false);
+    const [isStalemate, setIsStalemate] = useState(false);
+    const [isCheck, setIsCheck] = useState(false);
 
-    const syncBoard = async () => {
+    const getUserId = (): string | null => {
         try {
-            const boardData = await getBoard();
-            setFen(boardData?.board ?? "");
-            setIsGameOver(
-                boardData?.is_checkmate || boardData?.is_stalemate || boardData?.is_insufficient_material || false
-            );
-        } catch (error) {
-            console.error("Failed to sync board:", error);
-        }
+            const stored = sessionStorage.getItem("user");
+            if (stored) {
+                const user = JSON.parse(stored);
+                return user.username || user.uuid || null;
+            }
+        } catch { /* ignore */ }
+        return null;
     };
 
-    const makePlayerMove = async (from: string, to: string): Promise<boolean> => {
-        if (isLoading) return false;
-        const move = from + to;
+    const recordGameResult = useCallback(async (result: GameResult) => {
+        const userId = getUserId();
+        if (!userId || !result) return;
+        try {
+            if (result === "win") await recordWin(userId);
+            else if (result === "loss") await recordLoss(userId);
+            else if (result === "draw") await recordDraw(userId);
+        } catch (err) {
+            console.error("Failed to record game result:", err);
+        }
+    }, []);
+
+    const determineResult = useCallback((data: {
+        is_checkmate?: boolean;
+        is_stalemate?: boolean;
+        is_insufficient_material?: boolean;
+        turn?: string;
+    }): GameResult => {
+        if (data.is_checkmate) {
+            const loserTurn = data.turn;
+            if (loserTurn === playerColor) return "loss";
+            return "win";
+        }
+        if (data.is_stalemate || data.is_insufficient_material) {
+            return "draw";
+        }
+        return null;
+    }, [playerColor]);
+
+    const makePlayerMove = async (from: string, to: string, promotion?: string): Promise<boolean> => {
+        if (isLoading || !gameStarted) return false;
+        const move = from + to + (promotion || "");
 
         setIsLoading(true);
         try {
             const data = await makeMove(move);
+
+            if (data.error) {
+                console.warn("Move rejected:", data.error);
+                if (data.board) setFen(data.board);
+                return false;
+            }
+
             setFen(data.board ?? "");
             setLastAiMove(data.ai_move ?? null);
-            setIsGameOver(
-                data.is_checkmate || data.is_stalemate || data.is_insufficient_material || false
-            );
+            setIsCheck(data.is_check || false);
+            setIsCheckmate(data.is_checkmate || false);
+            setIsStalemate(data.is_stalemate || false);
+
+            const over = data.is_checkmate || data.is_stalemate || data.is_insufficient_material || false;
+            setIsGameOver(over);
+            setMoveCount(prev => prev + 1);
+
+            if (over) {
+                const result = determineResult(data);
+                setGameResult(result);
+                await recordGameResult(result);
+            }
+
             return true;
         } catch (err) {
             console.error("Move error:", err);
@@ -56,8 +146,16 @@ export const ChessProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const resetGame = async () => {
         setIsLoading(true);
         try {
-            const fen = await resetBoard();
-            setFen(fen ?? "");
+            const fenResult = await resetBoard();
+            setFen(fenResult ?? "");
+            setLastAiMove(null);
+            setIsGameOver(false);
+            setGameResult(null);
+            setMoveCount(0);
+            setIsCheck(false);
+            setIsCheckmate(false);
+            setIsStalemate(false);
+            setGameStarted(false);
         } catch (err) {
             console.error("Reset error:", err);
         } finally {
@@ -65,12 +163,54 @@ export const ChessProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
     };
 
-    useEffect(() => {
-        syncBoard();
-    }, []);
+    const dismissGameResult = () => {
+        setGameResult(null);
+    };
+
+    const toggleBoardFlip = () => {
+        setBoardFlipped(prev => !prev);
+    };
+
+    const setGameSettings = (newGameType: GameType, newPlayerColor: PlayerColor, newAiOpponent?: AiOpponent) => {
+        setGameType(newGameType);
+        setPlayerColor(newPlayerColor);
+        setAiOpponent(newAiOpponent || AiOpponent.DANIBOT);
+        setBoardFlipped(newPlayerColor === PlayerColor.BLACK);
+        setMoveCount(0);
+        setLastAiMove(null);
+        setIsGameOver(false);
+        setGameResult(null);
+        setIsCheck(false);
+        setIsCheckmate(false);
+        setIsStalemate(false);
+        setGameStarted(true);
+    };
 
     return (
-        <ChessContext.Provider value={{ fen, isLoading, makePlayerMove, resetGame, lastAiMove, isGameOver }}>
+        <ChessContext.Provider value={{
+            fen,
+            setFen,
+            isLoading,
+            makePlayerMove,
+            resetGame,
+            lastAiMove,
+            setLastAiMove,
+            isGameOver,
+            gameResult,
+            dismissGameResult,
+            boardFlipped,
+            toggleBoardFlip,
+            gameType,
+            playerColor,
+            aiOpponent,
+            setGameSettings,
+            moveCount,
+            gameStarted,
+            setGameStarted,
+            isCheckmate,
+            isStalemate,
+            isCheck,
+        }}>
             {children}
         </ChessContext.Provider>
     );

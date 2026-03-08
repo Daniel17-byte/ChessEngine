@@ -81,8 +81,6 @@ class Game:
     def reset(self):
         self.board.reset()
         self.turn = chess.WHITE  # Reset turn to white
-        print("🔄 Board has been reset to initial state.")  # Debugging log
-        print(f"Current FEN: {self.board.fen()}")  # Log the FEN for debugging
         return {
             "message": "Board reset",
             "fen": self.board.fen(),

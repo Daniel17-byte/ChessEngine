@@ -64,7 +64,10 @@ services:
       context: ./stats-be
       dockerfile: Dockerfile
     container_name: stats-be
+    ports:
+      - "8082:8082"
     environment:
+      SERVER_PORT: 8082
       SPRING_DATASOURCE_URL: jdbc:mysql://db_stats:3306/stats
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
@@ -80,6 +83,15 @@ services:
       context: ./matchmaking-be
       dockerfile: Dockerfile
     container_name: matchmaking-be
+    ports:
+      - "8083:8083"
+    environment:
+      SERVER_PORT: 8083
+      SPRING_RABBITMQ_HOST: rabbitmq
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      - rabbitmq
     networks:
       - my-network
 

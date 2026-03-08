@@ -75,6 +75,9 @@ public class GameService {
         int dRow = toRow - fromRow;
         int dCol = toCol - fromCol;
 
+        // Can't stay in place
+        if (dRow == 0 && dCol == 0) return false;
+
         Piece target = board.getPiece(move.getTo());
         if (target != null && target.getColor() == piece.getColor()) {
             return false;
@@ -82,26 +85,47 @@ public class GameService {
 
         return switch (piece.getType()) {
             case PAWN -> validatePawnMove(piece, fromRow, fromCol, toRow, toCol, target);
-            case ROOK -> dRow == 0 || dCol == 0;
+            case ROOK -> (dRow == 0 || dCol == 0) && isPathClear(fromRow, fromCol, toRow, toCol);
             case KNIGHT -> Math.abs(dRow) == 2 && Math.abs(dCol) == 1 ||
                     Math.abs(dRow) == 1 && Math.abs(dCol) == 2;
-            case BISHOP -> Math.abs(dRow) == Math.abs(dCol);
-            case QUEEN -> dRow == 0 || dCol == 0 || Math.abs(dRow) == Math.abs(dCol);
+            case BISHOP -> Math.abs(dRow) == Math.abs(dCol) && isPathClear(fromRow, fromCol, toRow, toCol);
+            case QUEEN -> (dRow == 0 || dCol == 0 || Math.abs(dRow) == Math.abs(dCol)) && isPathClear(fromRow, fromCol, toRow, toCol);
             case KING -> Math.abs(dRow) <= 1 && Math.abs(dCol) <= 1;
         };
+    }
+
+    private boolean isPathClear(int fromRow, int fromCol, int toRow, int toCol) {
+        int stepRow = Integer.signum(toRow - fromRow);
+        int stepCol = Integer.signum(toCol - fromCol);
+
+        int currentRow = fromRow + stepRow;
+        int currentCol = fromCol + stepCol;
+
+        while (currentRow != toRow || currentCol != toCol) {
+            if (board.getPiece(new Position(currentRow, currentCol)) != null) {
+                return false;
+            }
+            currentRow += stepRow;
+            currentCol += stepCol;
+        }
+        return true;
     }
 
     private boolean validatePawnMove(Piece piece, int fromRow, int fromCol, int toRow, int toCol, Piece target) {
         int direction = piece.getColor() == Color.WHITE ? -1 : 1;
         int startRow = piece.getColor() == Color.WHITE ? 6 : 1;
 
-        // Mutare simplă înainte
+        // Forward move
         if (fromCol == toCol && target == null) {
             if (toRow == fromRow + direction) return true;
-            if (fromRow == startRow && toRow == fromRow + 2 * direction) return true;
+            // Double move from starting position - check intermediate square is empty
+            if (fromRow == startRow && toRow == fromRow + 2 * direction) {
+                Piece intermediate = board.getPiece(new Position(fromRow + direction, fromCol));
+                return intermediate == null;
+            }
         }
 
-        // Captură pe diagonală
+        // Diagonal capture
         if (Math.abs(fromCol - toCol) == 1 && toRow == fromRow + direction && target != null) {
             return true;
         }

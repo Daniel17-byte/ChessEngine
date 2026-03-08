@@ -355,7 +355,7 @@ def run_mirror_match_training(epochs, max_moves, white_strategy, black_strategy,
             "--epochs", str(epochs),
             "--max-moves", str(max_moves),
             "--games-per-epoch", "200",
-            "--batch-size", "256",
+            "--batch-size", "512",
             "--white-strategy", white_strategy,
             "--black-strategy", black_strategy,
             "--fen-type", fen_type

@@ -119,7 +119,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--max-moves', type=int, default=80, help='Maximum moves per game')
     parser.add_argument('--games-per-epoch', type=int, default=200, help='Games to play per epoch')
-    parser.add_argument('--batch-size', type=int, default=256, help='Training batch size')
+    parser.add_argument('--batch-size', type=int, default=512, help='Training batch size')
     parser.add_argument('--white-strategy', type=str, default='model')
     parser.add_argument('--black-strategy', type=str, default='model')
     parser.add_argument('--fen-type', type=str, default='endgames')
@@ -133,12 +133,14 @@ def main():
         print(json.dumps({"error": f"Invalid black strategy: {args.black_strategy}"}))
         sys.exit(1)
 
-    valid_fen_types = ['endgames', 'normal_games', 'mixed']
+    valid_fen_types = ['endgames', 'normal_games', 'mixed', 'from_scratch']
     if args.fen_type not in valid_fen_types:
         print(json.dumps({"error": f"Invalid FEN type: {args.fen_type}"}))
         sys.exit(1)
 
-    if args.fen_type == 'endgames':
+    if args.fen_type == 'from_scratch':
+        fen_file = "__scratch__"
+    elif args.fen_type == 'endgames':
         fen_file = "generated_endgames.json"
     elif args.fen_type == 'normal_games':
         fen_file = "generated_games.json"
@@ -169,7 +171,10 @@ def main():
     criterion = nn.CrossEntropyLoss()
 
     # Load FEN positions
-    if fen_file:
+    if fen_file == "__scratch__":
+        fen_positions = []
+        print(json.dumps({"info": "Training from scratch — all games start from standard position"}))
+    elif fen_file:
         fen_positions = load_fens_from_files(fen_file)
     else:
         fen_positions = load_fens_from_files("generated_endgames.json") + load_fens_from_files("generated_games.json")

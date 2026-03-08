@@ -1,25 +1,53 @@
 .board {
+    position: relative;
     display: grid;
-    grid-template-rows: repeat(8, 70px);
+    grid-template-rows: repeat(8, 1fr);
+    width: min(70vh, 560px);
+    height: min(70vh, 560px);
+    border: 3px solid #5d4037;
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    user-select: none;
+    touch-action: none;
 }
 
 .row {
     display: grid;
-    grid-template-columns: repeat(8, 70px);
+    grid-template-columns: repeat(8, 1fr);
 }
 
 .cell {
+    position: relative;
     display: flex;
     justify-content: center;
     align-items: center;
-    background-color: #f0d9b5;
-    border: 1px solid #999;
-    font-size: 40px;
+    aspect-ratio: 1;
     cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.cell:hover {
+    filter: brightness(1.08);
+}
+
+.piece {
+    font-size: clamp(28px, 6vw, 48px);
+    pointer-events: none;
+    transition: opacity 0.1s;
+    line-height: 1;
+}
+
+.dragSource {
+    opacity: 0.3;
 }
 
 .selected {
-    background-color: yellow !important;
+    background-color: rgba(255, 255, 80, 0.6) !important;
+    box-shadow: inset 0 0 0 2px rgba(200, 180, 0, 0.6);
+}
+
+.inCheck {
+    background: radial-gradient(circle, #ff1744 0%, rgba(255, 23, 68, 0.4) 40%, transparent 70%) !important;
 }
 
 .light {
@@ -30,6 +58,97 @@
     background-color: #769656;
 }
 
-.cell span {
-    text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+/* Drag floating piece */
+.dragPiece {
+    position: fixed;
+    pointer-events: none;
+    font-size: 52px;
+    z-index: 9999;
+    transform: translate(-50%, -50%);
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+    line-height: 1;
+}
+
+/* Board coordinate labels */
+.fileLabel {
+    position: absolute;
+    bottom: 1px;
+    right: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.6;
+    pointer-events: none;
+    line-height: 1;
+}
+
+.rankLabel {
+    position: absolute;
+    top: 1px;
+    left: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.6;
+    pointer-events: none;
+    line-height: 1;
+}
+
+.light .fileLabel, .light .rankLabel {
+    color: #769656;
+}
+
+.dark .fileLabel, .dark .rankLabel {
+    color: #eeeed2;
+}
+
+@media (max-width: 600px) {
+    .board {
+        width: 95vw;
+        height: 95vw;
+    }
+}
+
+/* Promotion picker */
+.promotionOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 10;
+    border-radius: 2px;
+}
+
+.promotionPicker {
+    position: absolute;
+    width: 12.5%;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.promotionOption {
+    width: 100%;
+    aspect-ratio: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #f0f0f0;
+    cursor: pointer;
+    font-size: clamp(28px, 6vw, 48px);
+    transition: background 0.15s;
+    border-bottom: 1px solid #ddd;
+    line-height: 1;
+}
+
+.promotionOption:hover {
+    background: #ffe082;
+    transform: scale(1.05);
+}
+
+.promotionOption:last-child {
+    border-bottom: none;
 }
