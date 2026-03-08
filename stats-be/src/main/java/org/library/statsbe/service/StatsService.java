@@ -1,6 +1,5 @@
 package org.library.statsbe.service;
 
-import lombok.RequiredArgsConstructor;
 import org.library.statsbe.model.GameStat;
 import org.library.statsbe.repository.StatsRepository;
 import org.springframework.stereotype.Service;
@@ -8,9 +7,12 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-@RequiredArgsConstructor
 public class StatsService {
     private final StatsRepository repository;
+
+    public StatsService(StatsRepository repository) {
+        this.repository = repository;
+    }
 
     public GameStat updateWin(String userId) {
         GameStat stat = repository.findByUserId(userId).orElseGet(() -> new GameStat(null, userId, 0, 0, 0));

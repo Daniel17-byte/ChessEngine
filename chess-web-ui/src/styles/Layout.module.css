@@ -1,0 +1,138 @@
+.container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.navbar {
+    background-color: #2c3e50;
+    color: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.navContent {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+    height: 70px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 24px;
+    font-weight: bold;
+    text-decoration: none;
+    color: white;
+    transition: color 0.3s ease;
+}
+
+.logo:hover {
+    color: #4CAF50;
+}
+
+.navLinks {
+    display: flex;
+    gap: 30px;
+    align-items: center;
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.link {
+    color: white;
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.3s ease;
+    cursor: pointer;
+}
+
+.link:hover {
+    color: #4CAF50;
+}
+
+.logoutBtn {
+    padding: 8px 16px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.3s ease;
+}
+
+.logoutBtn:hover {
+    background-color: #c0392b;
+}
+
+.mobileMenuBtn {
+    display: none;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+.mobileMenu {
+    display: none;
+}
+
+.mobileLink {
+    display: block;
+    color: white;
+    text-decoration: none;
+    padding: 10px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mobileLogoutBtn {
+    width: 100%;
+    padding: 10px 20px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+@media (max-width: 768px) {
+    .navLinks {
+        display: none;
+    }
+
+    .mobileMenuBtn {
+        display: block;
+    }
+
+    .mobileMenu {
+        display: block;
+        background-color: #34495e;
+    }
+}
+
+.main {
+    flex: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 20px;
+}
+
+.footer {
+    background-color: #2c3e50;
+    color: white;
+    text-align: center;
+    padding: 20px;
+    margin-top: auto;
+}
+
+.footer p {
+    margin: 0;
+    font-size: 14px;
+}
+

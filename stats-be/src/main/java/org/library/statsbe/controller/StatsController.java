@@ -1,6 +1,5 @@
 package org.library.statsbe.controller;
 
-import lombok.RequiredArgsConstructor;
 import org.library.statsbe.model.GameStat;
 import org.library.statsbe.service.StatsService;
 import org.springframework.http.ResponseEntity;
@@ -10,9 +9,12 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/stats")
-@RequiredArgsConstructor
 public class StatsController {
     private final StatsService service;
+
+    public StatsController(StatsService service) {
+        this.service = service;
+    }
 
     @PostMapping("/win/{userId}")
     public ResponseEntity<GameStat> addWin(@PathVariable String userId) {
