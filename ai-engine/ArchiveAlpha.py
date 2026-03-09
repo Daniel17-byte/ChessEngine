@@ -76,9 +76,9 @@ def encode_board(board):
 def main():
     p = argparse.ArgumentParser(description='Train on Lichess PGN archive')
     p.add_argument('--pgn',          default='lichess_db.pgn', help='PGN file of games')
-    p.add_argument('--epochs',       type=int, default=5)
-    p.add_argument('--batch-size',   type=int, default=64)
-    p.add_argument('--chunk-size',   type=int, default=100, help='Games per chunk')
+    p.add_argument('--epochs',       type=int, default=1)
+    p.add_argument('--batch-size',   type=int, default=256)
+    p.add_argument('--chunk-size',   type=int, default=300, help='Games per chunk')
     p.add_argument('--lr',           type=float, default=1e-3)
     p.add_argument('--model-path',   default='chessnet.pth', help='Path to save/load model')
     args = p.parse_args()

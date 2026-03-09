@@ -95,17 +95,30 @@ def play_games(ai_white, ai_black, game, fen_positions, num_games, max_moves):
 
         result = game.get_result()
         stats[result] += 1
-
-        # Collect samples: winner's moves as positive examples
-        # Draw: use both sides (both played reasonably)
+        # Collect samples from BOTH sides to prevent color bias.
+        # Winner's moves are included fully; loser's moves are partially included
+        # to maintain balanced learning across colors.
         if result == '1-0':
+            # White won — all white moves + half of black moves (still useful positions)
             samples_states.extend([s for s, _ in white_history])
             samples_moves.extend([m for _, m in white_history])
+            # Include some loser moves to keep balanced color learning
+            if black_history:
+                half = max(1, len(black_history) // 2)
+                sampled = random.sample(black_history, half)
+                samples_states.extend([s for s, _ in sampled])
+                samples_moves.extend([m for _, m in sampled])
         elif result == '0-1':
+            # Black won — all black moves + half of white moves
             samples_states.extend([s for s, _ in black_history])
             samples_moves.extend([m for _, m in black_history])
+            if white_history:
+                half = max(1, len(white_history) // 2)
+                sampled = random.sample(white_history, half)
+                samples_states.extend([s for s, _ in sampled])
+                samples_moves.extend([m for _, m in sampled])
         else:
-            # Draw — use both sides
+            # Draw — use both sides equally
             samples_states.extend([s for s, _ in white_history])
             samples_moves.extend([m for _, m in white_history])
             samples_states.extend([s for s, _ in black_history])

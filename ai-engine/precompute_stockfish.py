@@ -15,21 +15,40 @@ import chess.engine
 
 def main():
     parser = argparse.ArgumentParser(description='Pre-compute Stockfish labels for training')
-    parser.add_argument('--input', default='generated_games.json', help='Input FEN file')
+    parser.add_argument('--input', default='generated_games.json', help='Input FEN file (normal games)')
+    parser.add_argument('--input-endgames', default='generated_endgames.json', help='Input FEN file (endgames)')
     parser.add_argument('--output', default='stockfish_labels.json', help='Output labels file')
-    parser.add_argument('--time-limit', type=float, default=0.05, help='Stockfish time per move (seconds)')
+    parser.add_argument('--time-limit', type=float, default=0.1, help='Stockfish time per move (seconds)')
     parser.add_argument('--engine-path', default='/opt/homebrew/bin/stockfish', help='Path to Stockfish binary')
     parser.add_argument('--resume', action='store_true', help='Resume from existing partial output')
     args = parser.parse_args()
 
-    # Load FENs
-    if not os.path.exists(args.input):
-        print(f"❌ Input file not found: {args.input}")
-        sys.exit(1)
+    # Load FENs from both sources
+    fens = []
 
-    with open(args.input, 'r') as f:
-        fens = json.load(f)
-    print(f"📋 Loaded {len(fens)} FEN positions from {args.input}")
+    if os.path.exists(args.input):
+        with open(args.input, 'r') as f:
+            normal_fens = json.load(f)
+        fens.extend(normal_fens)
+        print(f"📋 Loaded {len(normal_fens)} FEN positions from {args.input}")
+    else:
+        print(f"⚠️ Normal games file not found: {args.input} — skipping")
+
+    if os.path.exists(args.input_endgames):
+        with open(args.input_endgames, 'r') as f:
+            endgame_fens = json.load(f)
+        fens.extend(endgame_fens)
+        print(f"📋 Loaded {len(endgame_fens)} endgame positions from {args.input_endgames}")
+    else:
+        print(f"⚠️ Endgames file not found: {args.input_endgames} — skipping")
+
+    # Remove duplicates
+    fens = list(dict.fromkeys(fens))
+    print(f"📊 Total unique FEN positions: {len(fens)}")
+
+    if not fens:
+        print("❌ No FEN positions found in any input file!")
+        sys.exit(1)
 
     # Load existing results if resuming
     results = {}

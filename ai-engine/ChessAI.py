@@ -44,22 +44,23 @@ class ChessAI:
         else:
             print(f"Model not found ({model_path}) - training from scratch.")
 
-        if os.path.exists(engine_path):
+        # Only load Stockfish if the strategy might need it
+        needs_stockfish = default_strategy in (None, 'stockfish')
+        if needs_stockfish and os.path.exists(engine_path):
             self.engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-            # try:
-            #     self.engine.configure({"Skill Level": 10})
-            # except Exception as e:
-            #     print(f"⚠️ Nu s-a putut seta Skill Level: {e}")
-        else:
+        elif needs_stockfish:
             self.engine = None
             print(f"⚠️ Stockfish nu a fost găsit la {engine_path}. Strategy 'stockfish' nu va fi disponibil.")
+        else:
+            self.engine = None
+            print(f"ℹ️ Stockfish nu e necesar pentru strategia '{default_strategy}' — nu se încarcă.")
 
         with open("move_mapping.json") as f:
             self.idx_to_move = json.load(f)
         self.move_to_idx = {uci: i for i, uci in enumerate(self.idx_to_move)}
 
         self.model.eval()
-        self.epsilon = 0.01
+        self.epsilon = 0.05
         self.default_strategy = default_strategy
 
     def move_to_index(self, move_uci: str) -> int:
@@ -72,12 +73,6 @@ class ChessAI:
         self.board = board
         if strategy is None:
             strategy = self.default_strategy
-        if strategy is None:
-            strategy = random.choices(
-                ['epsilon', 'model', 'minimax', 'stockfish'],
-                weights=[10.0, 0.0, 0.0, 90.0],
-                k=1
-            )[0]
 
         if strategy == 'epsilon':
             return random.choice(list(self.board.legal_moves))
@@ -87,17 +82,9 @@ class ChessAI:
             return self.select_move_minimax(board)
         elif strategy == 'stockfish':
             return self.get_best_move_from_stockfish(board)
-        elif strategy == 'student':
-            weights = {'epsilon': 20, 'model': 80, 'stockfish': 0 , 'minimax': 0}
-            sub_strategy = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
-            return self.select_move(board, strategy=sub_strategy)
-        elif strategy == 'teacher':
-            weights = {'epsilon': 0, 'model': 20, 'stockfish': 80, 'minimax': 0}
-            sub_strategy = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
-            return self.select_move(board, strategy=sub_strategy)
         return None
 
-    def get_best_move_from_stockfish(self, board: chess.Board, time_limit: float = 0.005) -> Optional[chess.Move]:
+    def get_best_move_from_stockfish(self, board: chess.Board, time_limit: float = 0.05) -> Optional[chess.Move]:
         if self.engine is None:
             return random.choice(list(board.legal_moves))
         if board.is_game_over():
@@ -129,7 +116,9 @@ class ChessAI:
         best_move = chess.Move.from_uci(self.idx_to_move[best_idx])
 
         if best_move not in self.board.legal_moves:
-            return random.choice(legal_moves)
+            fallback = random.choice(legal_moves)
+            print(f"⚠️ Mutarea {best_move.uci()} nu e legală, fallback: {fallback.uci()}")
+            return fallback
 
         return best_move
 
