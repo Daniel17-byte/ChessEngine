@@ -2,6 +2,8 @@ flask~=3.1.1
 python-chess
 torch~=2.7.1
 numpy
+numba
+Cython
 chess~=1.11.2
 flask-cors~=6.0.1
 flask-socketio~=5.6.1

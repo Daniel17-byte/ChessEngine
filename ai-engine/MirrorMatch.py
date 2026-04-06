@@ -83,7 +83,8 @@ def play_games(ai_white, ai_black, game, fen_positions, num_games, max_moves):
 
             move_idx = move_to_idx.get(move.uci())
             if move_idx is not None:
-                board_tensor = encode_board(chess.Board(game.get_fen()))
+                # Use live board directly; avoid expensive FEN -> Board reconstruction.
+                board_tensor = encode_board(game.board)
                 if is_white_turn:
                     white_history.append((board_tensor, move_idx))
                 else:
@@ -216,7 +217,13 @@ def main():
         moves_tensor = torch.tensor(moves, dtype=torch.long, device=device)  # [N]
 
         dataset = TensorDataset(states_tensor, moves_tensor)
-        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=(device.type != "mps")
+        )
 
         ai_white.model.train()
         total_loss = 0.0
@@ -224,6 +231,10 @@ def main():
         total_samples = 0
 
         for batch_idx, (X, y) in enumerate(dataloader):
+            # non_blocking improves H2D transfer for CUDA when pin_memory is enabled.
+            X = X.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+
             optimizer.zero_grad()
             outputs = ai_white.model(X)
             loss = criterion(outputs, y)

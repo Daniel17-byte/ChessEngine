@@ -11,6 +11,25 @@ from torch.utils.data import Dataset, DataLoader
 import os
 import json
 
+USE_CYTHON_ENCODE = os.getenv("CHESS_ENCODE_FORCE_PYTHON", "0") != "1"
+if USE_CYTHON_ENCODE:
+    try:
+        from fastgame.board_encode import encode_board_array as cy_encode_board_array
+        HAS_CYTHON_ENCODE = True
+    except ImportError:
+        cy_encode_board_array = None
+        HAS_CYTHON_ENCODE = False
+else:
+    cy_encode_board_array = None
+    HAS_CYTHON_ENCODE = False
+
+try:
+    from numba import njit
+    HAS_NUMBA = True
+except ImportError:
+    njit = None
+    HAS_NUMBA = False
+
 # ── dataset utilities ─────────────────────────────────────────────────────────
 
 class ChessDataset(Dataset):
@@ -33,28 +52,38 @@ class ChessDataset(Dataset):
         y = self.move2idx[uci]               # integer label
         return x, y
 
-def encode_board(board):
-    """
-    18‐plane feature encoding:
-      planes 0–5   = white pawn, knight, bishop, rook, queen, king
-      planes 6–11  = black pawn, knight, bishop, rook, queen, king
-      plane 12     = turn indicator (all 1s if white to move, 0s if black)
-      planes 13–16 = castling rights (white K, white Q, black k, black q)
-      plane 17     = en passant square (1 at the target square, 0 elsewhere)
-    Returns a torch.FloatTensor of shape [18,8,8].
-    """
+def _encode_board_numpy(board):
+    """Fast NumPy encoding using bitboards."""
     arr = np.zeros((18, 8, 8), dtype=np.float32)
-    # Piece planes
-    for square, piece in board.piece_map().items():
-        pt = piece.piece_type  # 1..6
-        color = piece.color    # True=white, False=black
-        plane = (pt - 1) + (0 if color else 6)
-        rank = chess.square_rank(square)
-        file = chess.square_file(square)
-        arr[plane, rank, file] = 1.0
+
+    # Piece planes from bitboards (python-chess stores them as uint64 masks)
+    piece_specs = (
+        (chess.PAWN, chess.WHITE, 0),
+        (chess.KNIGHT, chess.WHITE, 1),
+        (chess.BISHOP, chess.WHITE, 2),
+        (chess.ROOK, chess.WHITE, 3),
+        (chess.QUEEN, chess.WHITE, 4),
+        (chess.KING, chess.WHITE, 5),
+        (chess.PAWN, chess.BLACK, 6),
+        (chess.KNIGHT, chess.BLACK, 7),
+        (chess.BISHOP, chess.BLACK, 8),
+        (chess.ROOK, chess.BLACK, 9),
+        (chess.QUEEN, chess.BLACK, 10),
+        (chess.KING, chess.BLACK, 11),
+    )
+
+    for piece_type, color, plane in piece_specs:
+        bb = board.pieces_mask(piece_type, color)
+        while bb:
+            lsb = bb & -bb
+            sq = lsb.bit_length() - 1
+            arr[plane, sq // 8, sq % 8] = 1.0
+            bb ^= lsb
+
     # Turn indicator
     if board.turn == chess.WHITE:
         arr[12, :, :] = 1.0
+
     # Castling rights
     if board.has_kingside_castling_rights(chess.WHITE):
         arr[13, :, :] = 1.0
@@ -64,20 +93,79 @@ def encode_board(board):
         arr[15, :, :] = 1.0
     if board.has_queenside_castling_rights(chess.BLACK):
         arr[16, :, :] = 1.0
+
     # En passant
     if board.ep_square is not None:
-        ep_rank = chess.square_rank(board.ep_square)
-        ep_file = chess.square_file(board.ep_square)
-        arr[17, ep_rank, ep_file] = 1.0
+        arr[17, board.ep_square // 8, board.ep_square % 8] = 1.0
+
+    return arr
+
+
+if HAS_NUMBA:
+    @njit(cache=True)
+    def _fill_piece_planes_numba(arr, masks):
+        for plane in range(12):
+            bb = masks[plane]
+            for sq in range(64):
+                if (bb >> sq) & np.uint64(1):
+                    arr[plane, sq // 8, sq % 8] = 1.0
+
+
+    def _encode_board_numba(board):
+        arr = np.zeros((18, 8, 8), dtype=np.float32)
+        masks = np.array([
+            board.pieces_mask(chess.PAWN, chess.WHITE),
+            board.pieces_mask(chess.KNIGHT, chess.WHITE),
+            board.pieces_mask(chess.BISHOP, chess.WHITE),
+            board.pieces_mask(chess.ROOK, chess.WHITE),
+            board.pieces_mask(chess.QUEEN, chess.WHITE),
+            board.pieces_mask(chess.KING, chess.WHITE),
+            board.pieces_mask(chess.PAWN, chess.BLACK),
+            board.pieces_mask(chess.KNIGHT, chess.BLACK),
+            board.pieces_mask(chess.BISHOP, chess.BLACK),
+            board.pieces_mask(chess.ROOK, chess.BLACK),
+            board.pieces_mask(chess.QUEEN, chess.BLACK),
+            board.pieces_mask(chess.KING, chess.BLACK),
+        ], dtype=np.uint64)
+
+        _fill_piece_planes_numba(arr, masks)
+
+        if board.turn == chess.WHITE:
+            arr[12, :, :] = 1.0
+        if board.has_kingside_castling_rights(chess.WHITE):
+            arr[13, :, :] = 1.0
+        if board.has_queenside_castling_rights(chess.WHITE):
+            arr[14, :, :] = 1.0
+        if board.has_kingside_castling_rights(chess.BLACK):
+            arr[15, :, :] = 1.0
+        if board.has_queenside_castling_rights(chess.BLACK):
+            arr[16, :, :] = 1.0
+        if board.ep_square is not None:
+            arr[17, board.ep_square // 8, board.ep_square % 8] = 1.0
+
+        return arr
+
+
+def encode_board(board):
+    """
+    18-plane feature encoding with Cython/Numba/NumPy fallback.
+    Returns a torch.FloatTensor of shape [18,8,8].
+    """
+    if HAS_CYTHON_ENCODE:
+        arr = cy_encode_board_array(board)
+    elif HAS_NUMBA:
+        arr = _encode_board_numba(board)
+    else:
+        arr = _encode_board_numpy(board)
     return torch.from_numpy(arr)
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
     p = argparse.ArgumentParser(description='Train on Lichess PGN archive')
-    p.add_argument('--pgn',          default='lichess_db.pgn', help='PGN file of games')
-    p.add_argument('--epochs',       type=int, default=1)
-    p.add_argument('--batch-size',   type=int, default=256)
+    p.add_argument('--pgn',          default='lichess_2350plus.pgn', help='PGN file of games')
+    p.add_argument('--epochs',       type=int, default=10, help='Number of training epochs')
+    p.add_argument('--batch-size',   type=int, default=256, help='Positions per batch')
     p.add_argument('--chunk-size',   type=int, default=300, help='Games per chunk')
     p.add_argument('--lr',           type=float, default=1e-3)
     p.add_argument('--model-path',   default='chessnet.pth', help='Path to save/load model')
@@ -204,7 +292,7 @@ def main():
                 chunk_avg_loss = chunk_loss / max(len(loader), 1)
 
                 # Print progress every chunk
-                if chunk_idx % 5 == 0 or len(games) < args.chunk_size:
+                if chunk_idx % 10 == 0 or len(games) < args.chunk_size:
                     total_acc = 100.0 * epoch_correct / max(epoch_total, 1)
                     total_avg_loss = epoch_loss / max(epoch_batches, 1)
                     print(
@@ -217,8 +305,8 @@ def main():
                     )
                     sys.stdout.flush()
 
-                # Save checkpoint every 50 chunks
-                if chunk_idx % 50 == 0:
+                # Save checkpoint every 100 chunks
+                if chunk_idx % 100 == 0:
                     torch.save(model.state_dict(), args.model_path)
                     print(f"💾 Checkpoint saved at chunk {chunk_idx}")
                     sys.stdout.flush()
