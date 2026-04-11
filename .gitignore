@@ -44,3 +44,16 @@ docker-compose.override.yml
 venv/
 __pycache__/
 *.pyc
+
+# === PyTorch model weights ===
+*.pth
+
+# === Chess PGN databases (large files) ===
+*.pgn
+
+# === Cython / C compiled artifacts ===
+*.so
+*.pyd
+ai-engine/fastgame/*.c
+ai-engine/fastgame/*.html
+ai-engine/build/

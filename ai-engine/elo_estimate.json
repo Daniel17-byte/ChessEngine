@@ -1,0 +1,55 @@
+{
+  "estimated_elo": 870,
+  "games_per_level": 10,
+  "max_moves": 80,
+  "results": {
+    "0": {
+      "wins": 0,
+      "draws": 4,
+      "losses": 6,
+      "win_rate": 0.2
+    },
+    "1": {
+      "wins": 0,
+      "draws": 7,
+      "losses": 3,
+      "win_rate": 0.35
+    },
+    "2": {
+      "wins": 0,
+      "draws": 6,
+      "losses": 4,
+      "win_rate": 0.3
+    },
+    "3": {
+      "wins": 0,
+      "draws": 4,
+      "losses": 6,
+      "win_rate": 0.2
+    },
+    "4": {
+      "wins": 0,
+      "draws": 6,
+      "losses": 4,
+      "win_rate": 0.3
+    },
+    "5": {
+      "wins": 0,
+      "draws": 5,
+      "losses": 5,
+      "win_rate": 0.25
+    },
+    "6": {
+      "wins": 0,
+      "draws": 3,
+      "losses": 7,
+      "win_rate": 0.15
+    },
+    "7": {
+      "wins": 0,
+      "draws": 2,
+      "losses": 8,
+      "win_rate": 0.1
+    }
+  }
+}

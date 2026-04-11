@@ -48,14 +48,17 @@ class Game:
             scaling = 1.0 if num_pieces > 20 else 1.5
             reward += PIECE_VALUES.get(captured_piece.symbol().lower(), 0) * scaling
 
-        # Temporarily push move to evaluate positional factors.
         self.board.push(move)
-
         board = self.board
         enemy_color = not board.turn
-        for square, piece in board.piece_map().items():
-            if piece.color == board.turn and board.is_attacked_by(enemy_color, square):
-                reward -= PIECE_VALUES.get(piece.symbol().lower(), 0) * 0.5
+
+        # Iterate map once and reuse local lookups in Python fallback.
+        piece_map = board.piece_map()
+        is_attacked_by = board.is_attacked_by
+        value_lookup = PIECE_VALUES.get
+        for square, piece in piece_map.items():
+            if piece.color == board.turn and is_attacked_by(enemy_color, square):
+                reward -= value_lookup(piece.symbol().lower(), 0) * 0.5
 
         for sq in CENTER_SQUARES:
             piece = board.piece_at(sq)
@@ -65,39 +68,94 @@ class Game:
         self.board.pop()
         return reward
 
-    def make_move(self, move_uci=None):
-        if self.board.is_game_over():
+    def _build_state_payload(self, board: chess.Board, reward: float = 0.0):
+        halfmove_clock = board.halfmove_clock
+        move_count = len(board.move_stack)
+        is_check = board.is_check()
+        is_checkmate = board.is_checkmate()
+        is_stalemate = board.is_stalemate()
+        is_insufficient_material = board.is_insufficient_material()
+
+        # Repetition checks are expensive; skip impossible cases early.
+        is_repetition = board.is_repetition() if move_count >= 8 else False
+        can_claim_threefold_repetition = board.can_claim_threefold_repetition() if move_count >= 8 else False
+        is_fifty_moves = board.is_fifty_moves() if halfmove_clock >= 100 else False
+        can_claim_fifty_moves = board.can_claim_fifty_moves() if halfmove_clock >= 100 else False
+        is_game_over = (
+            is_checkmate
+            or is_stalemate
+            or is_insufficient_material
+            or is_fifty_moves
+            or can_claim_threefold_repetition
+        )
+
+        return {
+            "fen": board.fen(),
+            "turn": "white" if board.turn == chess.WHITE else "black",
+            "is_check": is_check,
+            "is_checkmate": is_checkmate,
+            "is_stalemate": is_stalemate,
+            "is_insufficient_material": is_insufficient_material,
+            "is_fifty_moves": is_fifty_moves,
+            "can_claim_fifty_moves": can_claim_fifty_moves,
+            "is_repetition": is_repetition,
+            "can_claim_threefold_repetition": can_claim_threefold_repetition,
+            "is_game_over": is_game_over,
+            "reward": reward,
+        }
+
+    def _normalize_move(self, move_input):
+        if isinstance(move_input, chess.Move):
+            return move_input
+        if not move_input:
+            raise ValueError("Mutare ilegală")
+
+        move_uci = self._auto_promote_if_needed(move_input)
+        return chess.Move.from_uci(move_uci)
+
+    def _apply_move(self, move_input, include_state: bool, compute_reward: bool, skip_game_over_check: bool = False):
+        if not skip_game_over_check and self.board.is_game_over():
             return False, "Game is already over"
 
-        move_uci = self._auto_promote_if_needed(move_uci)
         try:
-            move = chess.Move.from_uci(move_uci)
-        except ValueError:
+            move = self._normalize_move(move_input)
+        except (ValueError, TypeError):
             return False, "Mutare ilegală"
 
-        if move not in self.board.legal_moves:
+        if not self.board.is_legal(move):
             return False, "Mutare ilegală"
 
         captured_piece = self.board.piece_at(move.to_square)
-        reward = self._calculate_reward(move, captured_piece)
+        reward = self._calculate_reward(move, captured_piece) if compute_reward else 0.0
 
         self.board.push(move)
         board = self.board
 
-        return True, {
-            "fen": board.fen(),
-            "turn": "white" if board.turn == chess.WHITE else "black",
-            "is_check": board.is_check(),
-            "is_checkmate": board.is_checkmate(),
-            "is_stalemate": board.is_stalemate(),
-            "is_insufficient_material": board.is_insufficient_material(),
-            "is_fifty_moves": board.is_fifty_moves(),
-            "can_claim_fifty_moves": board.can_claim_fifty_moves(),
-            "is_repetition": board.is_repetition(),
-            "can_claim_threefold_repetition": board.can_claim_threefold_repetition(),
-            "is_game_over": board.is_game_over(),
-            "reward": reward
-        }
+        if not include_state:
+            return True, {
+                "fen": board.fen(),
+                "turn": "white" if board.turn == chess.WHITE else "black",
+                "is_game_over": board.is_game_over(),
+                "reward": reward,
+            }
+
+        return True, self._build_state_payload(board, reward)
+
+    def make_move(self, move_uci=None, include_state: bool = True, compute_reward: bool = True):
+        return self._apply_move(move_uci, include_state=include_state, compute_reward=compute_reward)
+
+    def make_move_fast(self, move_uci_or_obj):
+        """Fast self-play path: minimal overhead, no reward, no expensive state."""
+        try:
+            move = move_uci_or_obj if isinstance(move_uci_or_obj, chess.Move) else chess.Move.from_uci(str(move_uci_or_obj))
+        except (ValueError, TypeError):
+            return False, None
+
+        if not self.board.is_legal(move):
+            return False, None
+
+        self.board.push(move)
+        return True, None
 
     def reset(self):
         self.board.reset()

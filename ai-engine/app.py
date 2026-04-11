@@ -116,7 +116,7 @@ def make_move():
             print("❌ Move is not legal.")
             return jsonify({'error': 'Illegal move', 'board': game.get_board_fen()}), 400
 
-        success, move_info = game.make_move(move)
+        success, move_info = game.make_move(move, include_state=False, compute_reward=False)
         print(f"✅ Player move valid: {success}")
 
         if not success:
@@ -339,7 +339,7 @@ def run_training(strategy, epochs, max_moves, white_strategy, black_strategy, fe
 def run_mirror_match_training(epochs, max_moves, white_strategy, black_strategy, fen_type):
     """Run MirrorMatch.py with specified parameters"""
     global training_state
-    training_state["current_status"] = f"Starting Mirror Match: {friendly_strategy(white_strategy)} vs {friendly_strategy(black_strategy)}..."
+    training_state["current_status"] = "Starting Mirror Match (model-only, from scratch)..."
 
     try:
         script_path = "MirrorMatch.py"
@@ -353,12 +353,13 @@ def run_mirror_match_training(epochs, max_moves, white_strategy, black_strategy,
             sys.executable,
             script_path,
             "--epochs", str(epochs),
-            "--max-moves", str(max_moves),
             "--games-per-epoch", "50",
             "--batch-size", "64",
-            "--white-strategy", white_strategy,
-            "--black-strategy", black_strategy,
-            "--fen-type", fen_type
+            "--policy-top-n", "3",
+            "--policy-sample-k", "2",
+            "--exploration-epsilon", "0.20",
+            "--random-opening-plies", "6",
+            "--draw-sample-ratio", "0.15",
         ]
 
         print(f"Running: {' '.join(cmd)}")
@@ -598,7 +599,7 @@ def run_archive_alpha_training(epochs):
 
         # Run Archive Alpha script
         process = subprocess.Popen(
-            [sys.executable, script_path, "--epochs", str(epochs)],
+            [sys.executable, script_path, "--epochs", str(epochs), "--training-only"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -628,14 +629,17 @@ def run_archive_alpha_training(epochs):
                     training_state["epochs"] = epoch_count
                     training_state["max_epochs"] = total
 
-                # Parse Epoch summary: "Epoch 1/5 - Avg Loss: 2.3 - Accuracy: 15.2%"
-                epoch_summary = re.search(r'Epoch\s+(\d+)/(\d+)\s*-\s*Avg Loss:\s*([0-9.]+)\s*-\s*Accuracy:\s*([0-9.]+)%', line)
+                # Parse Epoch summary:
+                # full-metrics: Epoch X/Y - Avg Loss: A - Accuracy: B%
+                # training-only: Epoch X/Y - Avg Loss: A - Positions: ...
+                epoch_summary = re.search(r'Epoch\s+(\d+)/(\d+)\s*-\s*Avg Loss:\s*([0-9.]+)(?:\s*-\s*Accuracy:\s*([0-9.]+)%)?', line)
                 if epoch_summary:
                     epoch_count = int(epoch_summary.group(1))
                     training_state["epochs"] = epoch_count
                     training_state["max_epochs"] = int(epoch_summary.group(2))
                     training_state["loss_value"] = float(epoch_summary.group(3))
-                    training_state["accuracy"] = float(epoch_summary.group(4))
+                    if epoch_summary.group(4) is not None:
+                        training_state["accuracy"] = float(epoch_summary.group(4))
                     training_state["current_status"] = (
                         f"Archive Alpha: Epoch {epoch_count}/{training_state['max_epochs']} | "
                         f"Loss: {training_state['loss_value']:.4f} | "
